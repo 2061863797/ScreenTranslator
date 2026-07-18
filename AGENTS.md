@@ -9,7 +9,7 @@
 - **入口**：`run.py` → `app.main.main`；启动器 `launcher.py` / `翻译.exe`（`build.ps1`）。
 - **路径**：`app/paths.py`；资源在 `runtime/`（**经 Git LFS 进库**）。
 - **配置**：`config.json`（gitignore）+ `config.example.json`；缺省见 `DEFAULTS`。
-- **安装**：`setup.ps1` / `scripts/download_runtime.ps1`。用户向说明以 **`README.md`** 为准。
+- **安装**：`setup.ps1` / `scripts/download_runtime.ps1`。用户向说明：中文 **`README.md`**，英文 **`README.en.md`** / **`SETTINGS.en.md`**。设置 UI 语言：`ui_language` = `zh`|`en`。
 - **CodeGraph**：`projectPath` = 本仓库根；排除 `venv/`、`*.db`；runtime 大文件可不索。
 
 ## 易混点

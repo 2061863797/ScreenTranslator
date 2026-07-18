@@ -8,7 +8,9 @@ Windows **offline** tray app: screenshot translation, selection (word) translati
 | OCR | PaddleOCR (PP-OCRv6 by default) |
 | Translation | Local `llama-server` + Tencent **HY-MT1.5** GGUF |
 
-**中文说明：** [README.md](./README.md)
+**中文说明：** [README.md](./README.md) · Settings: [SETTINGS.en.md](./SETTINGS.en.md)
+
+**Optional llama-server GUI (tinker only):** root `启动llama.bat` → `runtime\llama\llama启动.exe` (doc: [LLAMA启动器说明.md](./LLAMA启动器说明.md), Chinese). For daily translation use `run.py` / `翻译.exe`.
 
 ---
 

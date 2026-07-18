@@ -13,11 +13,14 @@ Large files are shipped **with the repo** via **[Git LFS](https://git-lfs.com)**
 ## Verify LFS
 
 ```powershell
+# From repo root (ScreenTranslator\), not inside runtime\
 git lfs install
 git lfs pull
-Get-Item .\models\*.gguf | Format-Table Name, Length
+Get-Item .\runtime\models\*.gguf | Format-Table Name, Length
 # Length should be ~1e9, not ~130 bytes
 ```
+
+Optional GUI for llama-server only: root `启动llama.bat` (see `LLAMA启动器说明.md`, Chinese).
 
 GitHub **Source zip** usually has **pointers only**, not real models.
 

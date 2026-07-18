@@ -15,13 +15,15 @@
 ## 克隆后请确认
 
 ```powershell
-# 在仓库根目录
+# 在「项目根目录」ScreenTranslator\ 下执行（不是 runtime\ 里）
 git lfs install
 git lfs pull
 
 # 真文件应约 1GB；若只有一百多字节，说明还是指针，LFS 未拉下
-Get-Item .\models\*.gguf | Format-Table Name, Length
+Get-Item .\runtime\models\*.gguf | Format-Table Name, Length
 ```
+
+图形启动 llama-server（可选）：项目根 **`启动llama.bat`**，说明见根目录 **`LLAMA启动器说明.md`**。
 
 未装 Git LFS 时，GitHub 网页下的 Source zip **通常只有指针、没有模型本体**。
 

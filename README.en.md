@@ -31,10 +31,11 @@ Windows **offline** tray app: screenshot translation, selection (word) translati
 
 | Method | Notes |
 |--------|--------|
-| **① Release zip (recommended)** | Open **[Releases](../../releases)**, download `runtime-*.zip`, **extract into the project root** so you get `runtime\models`, `runtime\llama`, `runtime\paddlex` |
-| ② Git LFS | `git lfs install` → clone → `git lfs pull` |
-| ③ Script / manual | `.\scripts\download_runtime.ps1` or see [runtime/README.en.md](./runtime/README.en.md) |
+| **① Release zip (recommended)** | Open **[Releases](../../releases)**, download `runtime-*.zip`, **extract into the project root** → `runtime\models`, `runtime\llama`, `runtime\paddlex` |
+| ② Script | `.\scripts\download_runtime.ps1` or `.\setup.ps1 -DownloadRuntime` |
+| ③ Manual | See [runtime/README.en.md](./runtime/README.en.md) |
 
+**Large files are not in Git** (no Git LFS).  
 **Not in the zip / not in Git:** `venv/`, `config.json`, history DB, logs — create with `setup.ps1` on each PC.
 
 ---

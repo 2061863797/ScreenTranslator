@@ -16,26 +16,26 @@ Windows **offline** tray app: screenshot translation, selection (word) translati
 
 ## What’s in this repo
 
-The repo includes **source code and large runtime files** via **[Git LFS](https://git-lfs.com)** (GitHub 100 MB file limit):
+| Content | How to get it |
+|---------|----------------|
+| **Source code** | `git clone` / Source zip |
+| **runtime (~2 GB)** model + llama + OCR | **Recommended: GitHub Release asset** `runtime-*.zip` |
 
-| Path | Content | Size (approx.) |
-|------|---------|----------------|
+| Path | Content | Size |
+|------|---------|------|
 | `runtime/models/` | `HY-MT1.5-1.8B-Q4_K_M.gguf` | ~1.1 GB |
-| `runtime/llama/` | `llama-server.exe` + CUDA/CPU DLLs | ~0.8 GB |
-| `runtime/paddlex/` | OCR weights (PP-OCRv6 medium) | ~0.13 GB |
-| **Total** | | **~2 GB** |
+| `runtime/llama/` | `llama-server.exe` + DLLs | ~0.8 GB |
+| `runtime/paddlex/` | OCR weights | ~0.13 GB |
 
-**When cloning:**
+### Get runtime (pick one)
 
-1. Install Git LFS: `git lfs install` ([git-lfs.com](https://git-lfs.com) or `winget install GitHub.GitLFS`)
-2. `git clone …` then `git lfs pull`
-3. Confirm the GGUF is ~1 GB, not a few‑KB pointer file
+| Method | Notes |
+|--------|--------|
+| **① Release zip (recommended)** | Open **[Releases](../../releases)**, download `runtime-*.zip`, **extract into the project root** so you get `runtime\models`, `runtime\llama`, `runtime\paddlex` |
+| ② Git LFS | `git lfs install` → clone → `git lfs pull` |
+| ③ Script / manual | `.\scripts\download_runtime.ps1` or see [runtime/README.en.md](./runtime/README.en.md) |
 
-**When pushing:** LFS uploads ~2 GB. Free GitHub LFS quota may be insufficient; you may need a [Data Pack](https://docs.github.com/en/billing/managing-billing-for-git-large-file-storage) or host binaries as Release assets.
-
-If LFS fails: `.\scripts\download_runtime.ps1` or see [runtime/README.en.md](./runtime/README.en.md).
-
-**Not in Git:** `venv/`, `config.json`, history DB, logs — create on each machine.
+**Not in the zip / not in Git:** `venv/`, `config.json`, history DB, logs — create with `setup.ps1` on each PC.
 
 ---
 
@@ -75,46 +75,47 @@ py -0p
 
 ### Runtime files
 
-After a full LFS clone you should have `runtime/models`, `runtime/llama`, `runtime/paddlex`.  
-Still need: `venv` via `setup.ps1`, and `config.json` generated from `config.example.json`.
+Prefer the **Release `runtime-*.zip`**. Still need `venv` + `config.json` via `setup.ps1`.
 
 ### Network
 
 | Step | Online? |
 |------|---------|
-| `git clone` / `git lfs pull` | Yes |
-| `pip` / Paddle install | Yes |
-| Daily translation | **No** (localhost only) |
+| `git clone` source | Yes |
+| Download Release runtime zip (~2 GB) | Yes (recommended) |
+| `pip` / Paddle | Yes |
+| Daily translation | **No** (localhost) |
 
 ---
 
 ## 2. Setup on a new PC
 
 ```powershell
-git lfs install
 git clone <repo-url> ScreenTranslator
 cd ScreenTranslator
-git lfs pull
+# Download runtime-*.zip from Releases → extract into this folder
+# (you should see .\runtime\models\*.gguf)
 
 # Allow scripts if needed:
 # Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 
 .\setup.ps1              # NVIDIA
 .\setup.ps1 -CpuOnly     # no discrete GPU
-# If runtime incomplete:
+# Only if runtime still missing:
 .\setup.ps1 -DownloadRuntime
 
 .\setup.ps1 -Check
 venv\Scripts\pythonw.exe run.py
 ```
 
-Optional launcher: `.\build.ps1` → `翻译.exe` (still needs local `venv` + `app`).
+Optional launcher: `.\build.ps1` → `翻译.exe`.
 
-### Manual runtime (if LFS/download fails)
+### Manual runtime (no Release zip)
 
 1. HuggingFace: **`HY-MT1.5-1.8B-Q4_K_M.gguf`** → `runtime\models\`
-2. [llama.cpp Releases](https://github.com/ggml-org/llama.cpp/releases): CUDA 12/13 or CPU zip → flatten `llama-server.exe` + DLLs into `runtime\llama\`
-3. `.\setup.ps1` then first OCR may fill `runtime\paddlex`
+2. [llama.cpp Releases](https://github.com/ggml-org/llama.cpp/releases) → `runtime\llama\`
+3. `.\setup.ps1` / first OCR for paddlex  
+Details: [runtime/README.en.md](./runtime/README.en.md)
 
 ### Config tips (`config.json`)
 
@@ -150,8 +151,8 @@ Only **one** continuous session at a time; switch **Subtitle ↔ Annotation** fr
 
 | Issue | Fix |
 |-------|-----|
-| Model file only a few KB | `git lfs install` + `git lfs pull` |
-| LFS quota on push | Buy LFS data pack or use Release assets |
+| Model file only a few KB | Download **Release `runtime-*.zip`** into project root |
+| Missing runtime | Releases asset, not “Source code” zip |
 | No paddlepaddle wheel | Use Python **3.12**, not 3.14 |
 | llama fails on GPU | `n_gpu_layers: 0` or CPU llama build |
 | Hotkeys dead | Rebind in Settings; try `mouse.x1` |

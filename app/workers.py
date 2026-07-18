@@ -2,7 +2,6 @@
 """后台任务线程：OCR 与翻译都不能跑在 UI 线程里。"""
 
 import time
-import traceback
 
 import numpy as np
 from PySide6.QtCore import QThread, Signal
@@ -12,6 +11,39 @@ from .ocr_engine import OcrEngine
 from .translator import Translator
 
 _log = get_logger("worker")
+
+
+def friendly_error(exc: BaseException) -> str:
+    """把异常收成托盘/UI 可读短句；完整栈写日志。"""
+    from .i18n import t
+
+    msg = str(exc) or type(exc).__name__
+    low = msg.lower()
+    if "exceed_context" in low or "context_size" in low or "n_ctx" in low:
+        return t("msg_err_context")
+    if any(
+        k in low
+        for k in (
+            "connection refused",
+            "actively refused",
+            "10061",
+            "failed to establish",
+            "max retries",
+            "connectionerror",
+            "newconnectionerror",
+        )
+    ):
+        return t("msg_err_connect")
+    if "timed out" in low or "timeout" in low:
+        return t("msg_err_timeout")
+    if "http 400" in low:
+        return t("msg_err_bad_request")
+    if "http 5" in low or "http 502" in low or "http 503" in low:
+        return t("msg_err_server")
+    short = msg.replace("\n", " ").strip()
+    if len(short) > 180:
+        short = short[:180] + "…"
+    return short or t("msg_error")
 
 
 class OcrTranslateWorker(QThread):
@@ -63,6 +95,6 @@ class OcrTranslateWorker(QThread):
 
             _log.info("worker 完成 %.2fs", time.time() - t0)
             self.finished_ok.emit(source, translation)
-        except Exception:
+        except Exception as e:
             _log.exception("worker 失败")
-            self.failed.emit(traceback.format_exc(limit=3))
+            self.failed.emit(friendly_error(e))

@@ -50,7 +50,10 @@ class HotkeyEdit(QLineEdit):
     """点击后录入全局热键：键盘组合 或 鼠标侧键（可加 Ctrl/Alt/Shift）。
 
     存储：键盘如 <alt>+q；侧键如 mouse.x1、<ctrl>+mouse.x2。
+    获得焦点时发 recording_changed(True)，便于暂停全局 HotkeyManager。
     """
+
+    recording_changed = Signal(bool)
 
     _MOD_KEYS = {
         Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta,
@@ -80,10 +83,12 @@ class HotkeyEdit(QLineEdit):
 
     def focusInEvent(self, event):
         self.setText(_ti("hk_press"))
+        self.recording_changed.emit(True)
         super().focusInEvent(event)
 
     def focusOutEvent(self, event):
         self.setText(self._display(self._value))
+        self.recording_changed.emit(False)
         super().focusOutEvent(event)
 
     def _mod_parts(self, mods) -> list[str]:
@@ -240,7 +245,7 @@ def _form_row(label: str, widget: QWidget):
 class SettingsWindow(_DraggableMixin, QWidget):
     """高级设置：侧栏分类 + 卡片内容；支持中/英界面。"""
 
-    def __init__(self, cfg: dict, on_saved=None):
+    def __init__(self, cfg: dict, on_saved=None, hotkey_manager=None):
         super().__init__()
         apply_frameless_float(self)
         self.resize(780, 560)
@@ -248,6 +253,7 @@ class SettingsWindow(_DraggableMixin, QWidget):
         ensure_stays_on_top(self)
         self._cfg = cfg
         self._on_saved = on_saved
+        self._hotkey_manager = hotkey_manager
         self._log_auto_scroll = True
         self._lang = "en" if str(cfg.get("ui_language", "zh")).lower().startswith("en") else "zh"
 
@@ -264,6 +270,15 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._hk_win = HotkeyEdit(cfg["hotkey_window"])
         self._hk_ocr = HotkeyEdit(cfg["hotkey_silent_ocr"])
         self._hk_region = HotkeyEdit(cfg["hotkey_region_watch"])
+        self._hk_edits = (
+            self._hk_shot,
+            self._hk_word,
+            self._hk_win,
+            self._hk_ocr,
+            self._hk_region,
+        )
+        for hk in self._hk_edits:
+            hk.recording_changed.connect(self._on_hotkey_recording)
 
         def _ms_spin() -> QSpinBox:
             sp = QSpinBox()
@@ -614,6 +629,16 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._load_recent_logs()
         super().showEvent(event)
 
+    def hideEvent(self, event):
+        # 关窗时强制恢复全局热键，避免录入焦点丢失导致一直 pause
+        hm = self._hotkey_manager
+        if hm is not None:
+            try:
+                hm.resume()
+            except Exception:
+                pass
+        super().hideEvent(event)
+
     def _load_recent_logs(self):
         lines = recent_lines(500)
         self._log_view.setPlainText("\n".join(lines))
@@ -680,6 +705,25 @@ class SettingsWindow(_DraggableMixin, QWidget):
         )
         self._refresh_color_swatch()
         self._max_tokens.setValue(int(cfg.get("max_tokens", 512)))
+
+    def _on_hotkey_recording(self, on: bool):
+        """录入热键时暂停全局监听，避免与输入框抢键。"""
+        hm = self._hotkey_manager
+        if hm is None:
+            return
+        if on:
+            try:
+                hm.pause()
+            except Exception:
+                pass
+            return
+        # 任一热键框仍有焦点则继续暂停
+        if any(e.hasFocus() for e in self._hk_edits):
+            return
+        try:
+            hm.resume()
+        except Exception:
+            pass
 
     def _save(self):
         from ..hotkeys import find_hotkey_conflicts
@@ -820,7 +864,11 @@ class _TranslateWorker(QThread):
         try:
             self.done.emit(self._translator.translate(self._text, self._target))
         except Exception as e:
-            self.failed.emit(str(e))
+            from ..applog import get_logger
+            from ..workers import friendly_error
+
+            get_logger("ui").exception("翻译面板失败")
+            self.failed.emit(friendly_error(e))
 
 
 class InputTranslateWindow(_DraggableMixin, QWidget):

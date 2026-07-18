@@ -36,6 +36,9 @@ class QtLogHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             msg = self.format(record)
+            # 单行过长（异常栈/超长 OCR）截断，避免设置页/环缓冲爆炸
+            if len(msg) > 2000:
+                msg = msg[:2000] + "…"
             _ring.append(msg)
             if len(_ring) > _RING_MAX:
                 del _ring[: len(_ring) - _RING_MAX]

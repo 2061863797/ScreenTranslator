@@ -138,6 +138,12 @@ def load() -> dict:
     if "window_annotate_skip_target_lang" in cfg and "region_annotate_skip_target_lang" in cfg:
         cfg.pop("annotate_skip_target_lang", None)
     _prefer_bundled_runtime(cfg)
+    # 强制本机回环，避免误配 0.0.0.0 暴露 llama-server
+    host = str(cfg.get("server_host") or "127.0.0.1").strip().lower()
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        cfg["server_host"] = "127.0.0.1"
+    else:
+        cfg["server_host"] = "127.0.0.1"
     return cfg
 
 

@@ -9,8 +9,8 @@
 
 import ctypes
 
-from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QShowEvent
+from PySide6.QtCore import QPoint, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QRegion, QShowEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -538,19 +538,103 @@ class _SubtitleCtrl(_CaptureExcludedMixin, QWidget):
         self._drag_offset = None
 
 
-class RegionWatchFrame(_CaptureExcludedMixin, QWidget):
-    """区域翻译专用：识别范围框。
+class _RegionCtrl(_CaptureExcludedMixin, QWidget):
+    """区域识别框控制条：与窗口翻译字幕/备注条同一套 CTRL_STYLE。"""
 
-    - 蓝色外框标出 OCR 区域（内容区）
-    - 顶栏在识别区上方：拖动移动、固定/解锁
-    - 未固定时可拖边/角缩放识别区（类似窗口缩放）
-    - 已排除屏幕捕获
+    def __init__(self, frame: "RegionWatchFrame"):
+        super().__init__()
+        self.setWindowFlags(_FLAGS_TOP)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._frame = frame
+        self._drag_offset = None
+        container = QWidget()
+        container.setObjectName("regCtrl")
+        lay = QHBoxLayout(container)
+        lay.setContentsMargins(8, 3, 8, 3)
+        lay.setSpacing(6)
+        self._handle = QLabel("⠿")
+        self._handle.setStyleSheet(
+            "color:#fff;font-size:14px;padding:0 2px;background:transparent;"
+        )
+        lay.addWidget(self._handle)
+        self._tip = QLabel()
+        lay.addWidget(self._tip)
+        self._btn_pin = QPushButton()
+        self._btn_pin.setCheckable(True)
+        self._btn_pin.setFixedHeight(20)
+        self._btn_pin.clicked.connect(self._on_pin)
+        lay.addWidget(self._btn_pin)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(container)
+        self.setStyleSheet(CTRL_STYLE)
+        self.apply_ui_language()
+
+    def apply_ui_language(self):
+        self._handle.setToolTip(_t("sub_drag_tip"))
+        self._tip.setText(_t("hk_region"))
+        self._sync_pin_text()
+        self.adjustSize()
+
+    def _sync_pin_text(self):
+        on = self._frame.pinned
+        self._btn_pin.blockSignals(True)
+        self._btn_pin.setChecked(on)
+        self._btn_pin.blockSignals(False)
+        self._btn_pin.setText(_t("frame_pin_on") if on else _t("frame_pin_off"))
+        self._btn_pin.setToolTip(_t("frame_pinned") if on else _t("frame_drag"))
+
+    def _on_pin(self):
+        self._frame.set_pinned(self._btn_pin.isChecked())
+        self._sync_pin_text()
+
+    def place_above(self, rect: tuple[int, int, int, int]):
+        """贴在识别区上方左侧（右侧留给备注/字幕控制条，与窗口翻译一致不抢位）。"""
+        x, y, w, h = rect
+        self.adjustSize()
+        nx = x
+        ny = y - self.height() - 4
+        first = not self.isVisible()
+        _move_if_changed(self, nx, ny)
+        _show_once(self)
+        if first:
+            _exclude_from_capture(self)
+        self.raise_()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and not self._frame.pinned:
+            cr = self._frame.content_rect()
+            self._drag_offset = event.globalPosition().toPoint() - QPoint(cr[0], cr[1])
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if (
+            self._drag_offset is not None
+            and not self._frame.pinned
+            and event.buttons() & Qt.MouseButton.LeftButton
+        ):
+            p = event.globalPosition().toPoint() - self._drag_offset
+            self._frame.move_content_to(p.x(), p.y())
+            event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if self._drag_offset is not None:
+            self._drag_offset = None
+            self._frame._emit_moved()
+            event.accept()
+
+
+class RegionWatchFrame(_CaptureExcludedMixin, QWidget):
+    """区域翻译识别框：仅描边识别区 + 右下角缩放。
+
+    顶栏控制（拖动 / 固定）与窗口翻译共用同一套浮层控制条样式（CTRL_STYLE），
+    不再使用自绘深色顶栏。
+
+    中心区域通过 setMask 镂空，鼠标点击穿透到下层窗口；仅边框可点用于缩放。
     """
 
     region_moved = Signal(int, int, int, int)
 
-    _BAR_H = 26
-    _PIN_W = 64
     _EDGE = 10
     _MIN_W = 100
     _MIN_H = 60
@@ -562,73 +646,109 @@ class RegionWatchFrame(_CaptureExcludedMixin, QWidget):
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.ArrowCursor)
         self._pinned = False
-        self._drag_offset = None
-        self._resize_edge: str | None = None  # l/r/t/b/tl/tr/bl/br
-        self._resize_origin = None  # (global_pos, geometry)
+        self._resize_edge: str | None = None
+        self._resize_origin = None
+        self._ctrl = _RegionCtrl(self)
+
+    def apply_ui_language(self):
+        self._ctrl.apply_ui_language()
+        self._place_ctrl()
+        self.update()
 
     def show_region(self, rect: tuple[int, int, int, int], *, pinned: bool = False):
-        """显示框：rect 为 OCR 识别区；顶栏画在其上方。"""
+        """显示 OCR 识别区描边；控制条贴在区域上方外侧。"""
         x, y, w, h = rect
         if w <= 0 or h <= 0:
-            self.hide()
+            self.hide_frame()
             return
         self._pinned = bool(pinned)
-        self._drag_offset = None
         self._resize_edge = None
-        # 整窗 = 顶栏 + 识别区
-        nx = x
-        ny = y - self._BAR_H
         nw = max(w, self._MIN_W)
-        nh = max(h, self._MIN_H) + self._BAR_H
+        nh = max(h, self._MIN_H)
         first = not self.isVisible()
-        _set_geo_if_changed(self, nx, ny, nw, nh)
+        _set_geo_if_changed(self, x, y, nw, nh)
+        self._update_hit_mask()
         _show_once(self)
         if first:
             _exclude_from_capture(self)
+        self._ctrl._sync_pin_text()
+        self._place_ctrl()
         self.update()
 
+    def _place_ctrl(self):
+        if self.isVisible():
+            self._ctrl.place_above(self.content_rect())
+
     def content_rect(self) -> tuple[int, int, int, int]:
-        """当前 OCR 识别区（不含顶栏）。"""
+        """当前 OCR 识别区 = 本窗几何。"""
         g = self.geometry()
-        return g.x(), g.y() + self._BAR_H, g.width(), max(0, g.height() - self._BAR_H)
+        return g.x(), g.y(), g.width(), g.height()
+
+    def move_content_to(self, x: int, y: int):
+        """控制条拖动：移动识别区。"""
+        if self._pinned:
+            return
+        g = self.geometry()
+        self.move(x, y)
+        self._place_ctrl()
+        self.region_moved.emit(x, y, g.width(), g.height())
+
+    def _emit_moved(self):
+        self.region_moved.emit(*self.content_rect())
 
     @property
     def pinned(self) -> bool:
         return self._pinned
 
-    def hide_frame(self):
-        self._drag_offset = None
-        self._resize_edge = None
-        self._pinned = False
-        self.hide()
-
-    def _toggle_pin(self):
-        self._pinned = not self._pinned
-        self._drag_offset = None
+    def set_pinned(self, on: bool):
+        self._pinned = bool(on)
         self._resize_edge = None
         self.setCursor(Qt.CursorShape.ArrowCursor)
+        self._ctrl._sync_pin_text()
+        self._update_hit_mask()
         self.update()
 
-    def _pin_hit(self):
-        from PySide6.QtCore import QRect
+    def hide_frame(self):
+        if self._resize_edge is not None:
+            try:
+                self.releaseMouse()
+            except Exception:
+                pass
+        self._resize_edge = None
+        self._resize_origin = None
+        self._pinned = False
+        try:
+            self._ctrl.hide()
+        except Exception:
+            pass
+        self.hide()
 
-        return QRect(
-            max(0, self.width() - self._PIN_W - 4),
-            2,
-            self._PIN_W,
-            self._BAR_H - 4,
-        )
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # 拖动缩放时也要刷新镂空，保证中心始终穿透
+        self._update_hit_mask()
+
+    def _update_hit_mask(self):
+        """仅边框接收鼠标；中心镂空点击穿透到下层应用。"""
+        e = self._EDGE
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            return
+        if w <= e * 2 or h <= e * 2:
+            # 过小无法镂空，整窗可点（仍可缩放）
+            self.clearMask()
+            return
+        outer = QRegion(0, 0, w, h)
+        inner = QRegion(e, e, w - 2 * e, h - 2 * e)
+        self.setMask(outer.subtracted(inner))
 
     def _hit_resize_edge(self, pos) -> str | None:
-        """识别区边缘/角命中；顶栏不参与缩放。"""
-        if pos.y() < self._BAR_H:
-            return None
         e = self._EDGE
         x, y = pos.x(), pos.y()
         w, h = self.width(), self.height()
         left = x <= e
         right = x >= w - e
-        top = self._BAR_H <= y <= self._BAR_H + e
+        top = y <= e
         bottom = y >= h - e
         if top and left:
             return "tl"
@@ -662,49 +782,23 @@ class RegionWatchFrame(_CaptureExcludedMixin, QWidget):
         return m.get(edge, Qt.CursorShape.ArrowCursor)
 
     def mousePressEvent(self, event):
-        if event.button() != Qt.MouseButton.LeftButton:
+        if event.button() != Qt.MouseButton.LeftButton or self._pinned:
             return
-        pos = event.position().toPoint()
-        if pos.y() <= self._BAR_H:
-            pr = self._pin_hit()
-            if pr.contains(pos):
-                self._toggle_pin()
-                event.accept()
-                return
-            if not self._pinned:
-                self._drag_offset = event.globalPosition().toPoint() - self.pos()
-                self.setCursor(Qt.CursorShape.SizeAllCursor)
-                event.accept()
-            return
-        if not self._pinned:
-            edge = self._hit_resize_edge(pos)
-            if edge:
-                self._resize_edge = edge
-                self._resize_origin = (
-                    event.globalPosition().toPoint(),
-                    self.geometry(),
-                )
-                event.accept()
+        edge = self._hit_resize_edge(event.position().toPoint())
+        if edge:
+            self._resize_edge = edge
+            self._resize_origin = (
+                event.globalPosition().toPoint(),
+                self.geometry(),
+            )
+            # 镂空后光标易离开边框，grab 保证拖动跟手
+            self.grabMouse()
+            event.accept()
 
     def mouseMoveEvent(self, event):
         pos = event.position().toPoint()
-        # 悬停光标
-        if self._drag_offset is None and self._resize_edge is None and not self._pinned:
-            if pos.y() <= self._BAR_H:
-                self.setCursor(Qt.CursorShape.ArrowCursor)
-            else:
-                self.setCursor(self._cursor_for_edge(self._hit_resize_edge(pos)))
-
-        if (
-            self._drag_offset is not None
-            and not self._pinned
-            and event.buttons() & Qt.MouseButton.LeftButton
-        ):
-            p = event.globalPosition().toPoint() - self._drag_offset
-            self.move(p.x(), p.y())
-            self.region_moved.emit(*self.content_rect())
-            event.accept()
-            return
+        if self._resize_edge is None and not self._pinned:
+            self.setCursor(self._cursor_for_edge(self._hit_resize_edge(pos)))
 
         if (
             self._resize_edge
@@ -723,23 +817,29 @@ class RegionWatchFrame(_CaptureExcludedMixin, QWidget):
             if "r" in edge:
                 w = max(self._MIN_W, w + d.x())
             if "t" in edge:
-                # 顶边是识别区顶 = 整窗 y+BAR_H，缩放时动 y 且改高
-                nh = max(self._MIN_H + self._BAR_H, h - d.y())
+                nh = max(self._MIN_H, h - d.y())
                 y = y + (h - nh)
                 h = nh
             if "b" in edge:
-                h = max(self._MIN_H + self._BAR_H, h + d.y())
+                h = max(self._MIN_H, h + d.y())
             self.setGeometry(x, y, w, h)
+            self._update_hit_mask()
+            self._place_ctrl()
             self.region_moved.emit(*self.content_rect())
             self.update()
             event.accept()
 
     def mouseReleaseEvent(self, event):
-        if self._drag_offset is not None or self._resize_edge is not None:
-            self._drag_offset = None
+        if self._resize_edge is not None:
             self._resize_edge = None
             self._resize_origin = None
+            try:
+                self.releaseMouse()
+            except Exception:
+                pass
             self.setCursor(Qt.CursorShape.ArrowCursor)
+            self._update_hit_mask()
+            self._place_ctrl()
             self.region_moved.emit(*self.content_rect())
             event.accept()
 
@@ -747,33 +847,9 @@ class RegionWatchFrame(_CaptureExcludedMixin, QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         w, h = self.width(), self.height()
-        # 顶栏：与翻译结果窗同系深色条
-        painter.fillRect(0, 0, w, self._BAR_H, PANEL_QCOLOR)
-        painter.setPen(MUTED_QCOLOR)
-        if self._pinned:
-            title = _t("frame_pinned")
-        else:
-            title = _t("frame_drag")
-        painter.drawText(
-            8, 0, max(0, w - self._PIN_W - 16), self._BAR_H,
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-            title,
-        )
-        pr = self._pin_hit()
-        painter.fillRect(
-            pr, ACCENT_QCOLOR if self._pinned else FIELD_QCOLOR
-        )
-        painter.setPen(TEXT_QCOLOR)
-        painter.drawText(
-            pr, Qt.AlignmentFlag.AlignCenter,
-            _t("frame_pin_on") if self._pinned else _t("frame_pin_off"),
-        )
-        # 识别区外框（浅色描边，不抢戏）
+        # 仅识别区描边（与窗口翻译一致：控制在外侧浮层，不自绘顶栏）
         painter.setPen(QPen(BORDER_QCOLOR, 2))
-        painter.drawRect(
-            1, self._BAR_H, max(0, w - 3), max(0, h - self._BAR_H - 1)
-        )
-        # 右下角缩放：与翻译窗同形态的三道斜线
+        painter.drawRect(1, 1, max(0, w - 3), max(0, h - 3))
         if not self._pinned:
             painter.save()
             painter.translate(w - 18, h - 18)

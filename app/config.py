@@ -39,6 +39,8 @@ DEFAULTS = {
 
     # 翻译
     "target_language": "简体中文",   # 源语言自动识别，统一译为该语言（翻译窗口内可随时切换）
+    # 设置窗口界面语言：zh | en
+    "ui_language": "zh",
     # 单次生成上限；屏幕翻译通常几百 token 内，过大只浪费上限预留
     "max_tokens": 512,
 

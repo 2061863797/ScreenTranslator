@@ -36,6 +36,7 @@ from .theme import (
     SETTINGS_STYLE,
     apply_frameless_float,
 )
+from .settings_i18n import t as _tr
 from .topmost import ensure_stays_on_top, raise_to_front, show_toast, topmost_message
 
 LANGUAGES = [
@@ -201,8 +202,8 @@ class HotkeyEdit(QLineEdit):
         return "+".join(out) if out else ""
 
 
-def _settings_card(title: str, hint: str = "") -> tuple[QFrame, QVBoxLayout]:
-    """设置页内容卡片。"""
+def _settings_card(title: str, hint: str = ""):
+    """设置页内容卡片。返回 (card, layout, title_label, hint_label)。"""
     card = QFrame()
     card.setObjectName("card")
     lay = QVBoxLayout(card)
@@ -211,15 +212,16 @@ def _settings_card(title: str, hint: str = "") -> tuple[QFrame, QVBoxLayout]:
     t = QLabel(title)
     t.setObjectName("cardTitle")
     lay.addWidget(t)
-    if hint:
-        h = QLabel(hint)
-        h.setObjectName("cardHint")
-        h.setWordWrap(True)
-        lay.addWidget(h)
-    return card, lay
+    # 始终创建 hint，便于 i18n 刷新
+    h = QLabel(hint or "")
+    h.setObjectName("cardHint")
+    h.setWordWrap(True)
+    lay.addWidget(h)
+    return card, lay, t, h
 
 
-def _form_row(label: str, widget: QWidget) -> QHBoxLayout:
+def _form_row(label: str, widget: QWidget):
+    """返回 (layout, label_widget)。"""
     row = QHBoxLayout()
     row.setSpacing(12)
     lab = QLabel(label)
@@ -227,15 +229,15 @@ def _form_row(label: str, widget: QWidget) -> QHBoxLayout:
     lab.setStyleSheet("color:rgba(255,255,255,200);")
     row.addWidget(lab)
     row.addWidget(widget, stretch=1)
-    return row
+    return row, lab
+
 
 
 class SettingsWindow(_DraggableMixin, QWidget):
-    """高级设置：侧栏分类 + 卡片内容；实时日志独立页。"""
+    """高级设置：侧栏分类 + 卡片内容；支持中/英界面。"""
 
     def __init__(self, cfg: dict, on_saved=None):
         super().__init__()
-        self.setWindowTitle("设置")
         apply_frameless_float(self)
         self.resize(780, 560)
         self.setMinimumSize(640, 440)
@@ -243,8 +245,13 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._cfg = cfg
         self._on_saved = on_saved
         self._log_auto_scroll = True
+        self._lang = "en" if str(cfg.get("ui_language", "zh")).lower().startswith("en") else "zh"
 
-        # —— 控件 ——
+        self._ui_lang = QComboBox()
+        self._ui_lang.addItem("中文", "zh")
+        self._ui_lang.addItem("English", "en")
+        self._ui_lang.setCurrentIndex(1 if self._lang == "en" else 0)
+
         self._target = QComboBox()
         self._target.addItems(LANGUAGES)
 
@@ -263,51 +270,31 @@ class SettingsWindow(_DraggableMixin, QWidget):
 
         self._win_interval = _ms_spin()
         self._win_annotate = QComboBox()
-        self._win_annotate.addItem("字幕条（整段译，窗口外侧不遮挡）", False)
-        self._win_annotate.addItem("备注（按行译，贴在原文旁）", True)
-        self._win_annotate.setToolTip(
-            "字幕条：译文在目标窗口下方外侧，不遮挡。"
-            "备注：与区域相同，译文贴在窗口内原文旁。"
-        )
+        self._win_annotate.addItem("", False)
+        self._win_annotate.addItem("", True)
         self._reg_interval = _ms_spin()
         self._reg_annotate = QComboBox()
-        self._reg_annotate.addItem("字幕条（整段译，识别区外侧）", False)
-        self._reg_annotate.addItem("备注（按行译，贴在原文旁）", True)
-        self._reg_annotate.setToolTip(
-            "字幕条=识别区下方整段译文；备注=译文贴在识别区内原文旁。"
-        )
+        self._reg_annotate.addItem("", False)
+        self._reg_annotate.addItem("", True)
 
-        self._win_skip_target = QCheckBox("不翻译已是目标语言的文字")
-        self._win_skip_target.setToolTip(
-            "仅窗口备注模式：判定为已是目标语言的行不再送模型、不叠备注标签。"
-            "也可在备注条「跳过目标语」按钮切换（仅影响窗口）。"
-        )
-        self._reg_skip_target = QCheckBox("不翻译已是目标语言的文字")
-        self._reg_skip_target.setToolTip(
-            "仅区域备注模式：判定为已是目标语言的行不再送模型、不叠备注标签。"
-            "也可在备注条「跳过目标语」按钮切换（仅影响区域）。"
-        )
+        self._win_skip_target = QCheckBox()
+        self._reg_skip_target = QCheckBox()
 
-        # 备注译文颜色（窗口/区域共用）
         self._ann_color = QLineEdit()
         self._ann_color.setPlaceholderText("#00F0FF")
         self._ann_color.setMaxLength(9)
         self._ann_color.setFixedWidth(100)
-        self._ann_color.setToolTip("备注模式译文颜色，#RRGGBB；窗口与区域共用")
-        self._ann_color_btn = QPushButton("选色")
+        self._ann_color_btn = QPushButton()
         self._ann_color_btn.setFixedWidth(52)
         self._ann_color_btn.clicked.connect(self._pick_annotate_color)
         self._ann_color_swatch = QLabel()
         self._ann_color_swatch.setFixedSize(22, 22)
-        self._ann_color_swatch.setToolTip("当前颜色预览")
         self._ann_color.textChanged.connect(self._refresh_color_swatch)
 
         self._max_tokens = QSpinBox()
         self._max_tokens.setRange(64, 8192)
         self._max_tokens.setSingleStep(128)
-        self._max_tokens.setToolTip("单次翻译最大生成长度；过小可能截断，过大略增延迟")
 
-        # —— 分页内容 ——
         self._stack = QStackedWidget()
         self._stack.addWidget(self._page_general())
         self._stack.addWidget(self._page_hotkeys())
@@ -316,7 +303,6 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._stack.addWidget(self._page_advanced())
         self._stack.addWidget(self._page_log())
 
-        # —— 侧栏 ——
         nav = QFrame()
         nav.setObjectName("sideNav")
         nav.setFixedWidth(148)
@@ -325,56 +311,52 @@ class SettingsWindow(_DraggableMixin, QWidget):
         nav_lay.setSpacing(4)
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
-        for i, name in enumerate(
-            ("常规", "热键", "窗口翻译", "区域翻译", "高级", "日志")
-        ):
-            btn = QPushButton(name)
+        self._nav_btns: list[QPushButton] = []
+        for i in range(6):
+            btn = QPushButton()
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             if i == 0:
                 btn.setChecked(True)
             self._nav_group.addButton(btn, i)
+            self._nav_btns.append(btn)
             nav_lay.addWidget(btn)
         nav_lay.addStretch()
         self._nav_group.idClicked.connect(self._stack.setCurrentIndex)
 
-        # —— 标题栏 ——
         title_bar = QWidget()
         title_bar.setObjectName("titleBar")
         tb = QHBoxLayout(title_bar)
         tb.setContentsMargins(4, 0, 0, 0)
         title_col = QVBoxLayout()
         title_col.setSpacing(0)
-        title_lbl = QLabel("设置")
-        title_lbl.setObjectName("titleLabel")
-        sub = QLabel("ScreenTranslator · 本地离线")
-        sub.setObjectName("subtitle")
-        title_col.addWidget(title_lbl)
-        title_col.addWidget(sub)
+        self._title_lbl = QLabel()
+        self._title_lbl.setObjectName("titleLabel")
+        self._sub_lbl = QLabel()
+        self._sub_lbl.setObjectName("subtitle")
+        title_col.addWidget(self._title_lbl)
+        title_col.addWidget(self._sub_lbl)
         tb.addLayout(title_col)
         tb.addStretch()
-        btn_close = QPushButton("×")
-        btn_close.setObjectName("closeBtn")
-        btn_close.setFixedSize(32, 28)
-        btn_close.setToolTip("关闭")
-        btn_close.clicked.connect(self.hide)
-        tb.addWidget(btn_close)
+        self._btn_close = QPushButton("×")
+        self._btn_close.setObjectName("closeBtn")
+        self._btn_close.setFixedSize(32, 28)
+        self._btn_close.clicked.connect(self.hide)
+        tb.addWidget(self._btn_close)
 
-        # —— 底栏 ——
         footer = QWidget()
         footer.setObjectName("footer")
         foot = QHBoxLayout(footer)
         foot.setContentsMargins(0, 10, 0, 0)
         foot.addStretch()
-        btn_save = QPushButton("保存设置")
-        btn_save.setObjectName("primaryBtn")
-        btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_save.clicked.connect(self._save)
-        foot.addWidget(btn_save)
+        self._btn_save = QPushButton()
+        self._btn_save.setObjectName("primaryBtn")
+        self._btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_save.clicked.connect(self._save)
+        foot.addWidget(self._btn_save)
         foot.addSpacing(4)
         foot.addWidget(CornerSizeGrip(footer), 0, Qt.AlignmentFlag.AlignBottom)
 
-        # —— 主体 ——
         body = QHBoxLayout()
         body.setSpacing(14)
         body.addWidget(nav)
@@ -398,7 +380,91 @@ class SettingsWindow(_DraggableMixin, QWidget):
             self._append_log_line, Qt.ConnectionType.QueuedConnection
         )
         self.reload_from_cfg()
+        self._apply_i18n()
         self._load_recent_logs()
+
+    def _tr(self, key: str, **kwargs) -> str:
+        return _tr(self._lang, key, **kwargs)
+
+    def _apply_i18n(self):
+        tr = self._tr
+        self.setWindowTitle(tr("win_title"))
+        self._title_lbl.setText(tr("title"))
+        self._sub_lbl.setText(tr("subtitle"))
+        self._btn_close.setToolTip(tr("close"))
+        self._btn_save.setText(tr("save"))
+        nav_keys = (
+            "nav_general", "nav_hotkeys", "nav_window",
+            "nav_region", "nav_advanced", "nav_log",
+        )
+        for btn, k in zip(self._nav_btns, nav_keys):
+            btn.setText(tr(k))
+
+        self._ui_lang.blockSignals(True)
+        self._ui_lang.setItemText(0, tr("lang_zh"))
+        self._ui_lang.setItemText(1, tr("lang_en"))
+        self._ui_lang.blockSignals(False)
+
+        self._lab_ui_lang.setText(tr("ui_lang"))
+        self._hint_ui_lang.setText(tr("ui_lang_hint"))
+        self._card_general_title.setText(tr("card_general"))
+        self._card_general_hint.setText(tr("card_general_hint"))
+        self._lab_target.setText(tr("target_lang"))
+        self._lab_ann_color.setText(tr("ann_color"))
+        self._ann_color.setToolTip(tr("ann_color_tip"))
+        self._ann_color_btn.setText(tr("ann_color_pick"))
+        self._ann_color_swatch.setToolTip(tr("ann_color_preview"))
+        self._ann_color_note.setText(tr("ann_color_note"))
+
+        self._card_hk_title.setText(tr("card_hotkeys"))
+        self._card_hk_hint.setText(tr("card_hotkeys_hint"))
+        self._lab_hk_shot.setText(tr("hk_shot"))
+        self._lab_hk_word.setText(tr("hk_word"))
+        self._lab_hk_ocr.setText(tr("hk_ocr"))
+        self._lab_hk_win.setText(tr("hk_win"))
+        self._lab_hk_region.setText(tr("hk_region"))
+
+        self._card_win_title.setText(tr("card_window"))
+        self._card_win_hint.setText(tr("card_window_hint"))
+        self._lab_win_interval.setText(tr("interval"))
+        self._lab_win_mode.setText(tr("display_mode"))
+        self._win_interval.setSuffix(tr("ms_suffix"))
+        wi = self._win_annotate.currentIndex()
+        self._win_annotate.setItemText(0, tr("mode_sub_win"))
+        self._win_annotate.setItemText(1, tr("mode_ann_win"))
+        self._win_annotate.setCurrentIndex(wi)
+        self._win_annotate.setToolTip(tr("tip_win_mode"))
+        self._card_win_ann_title.setText(tr("card_win_ann"))
+        self._card_win_ann_hint.setText(tr("card_win_ann_hint"))
+        self._win_skip_target.setText(tr("skip_target"))
+        self._win_skip_target.setToolTip(tr("skip_win_tip"))
+
+        self._card_reg_title.setText(tr("card_region"))
+        self._card_reg_hint.setText(tr("card_region_hint"))
+        self._lab_reg_interval.setText(tr("interval"))
+        self._lab_reg_mode.setText(tr("display_mode"))
+        self._reg_interval.setSuffix(tr("ms_suffix"))
+        ri = self._reg_annotate.currentIndex()
+        self._reg_annotate.setItemText(0, tr("mode_sub_reg"))
+        self._reg_annotate.setItemText(1, tr("mode_ann_reg"))
+        self._reg_annotate.setCurrentIndex(ri)
+        self._reg_annotate.setToolTip(tr("tip_reg_mode"))
+        self._card_reg_ann_title.setText(tr("card_reg_ann"))
+        self._card_reg_ann_hint.setText(tr("card_reg_ann_hint"))
+        self._reg_skip_target.setText(tr("skip_target"))
+        self._reg_skip_target.setToolTip(tr("skip_reg_tip"))
+
+        self._card_adv_title.setText(tr("card_advanced"))
+        self._card_adv_hint.setText(tr("card_advanced_hint"))
+        self._lab_max_tokens.setText("max_tokens")
+        self._max_tokens.setToolTip(tr("max_tokens_tip"))
+
+        self._card_log_title.setText(tr("card_log"))
+        self._card_log_hint.setText(tr("card_log_hint", log=LOG_PATH.name))
+        self._log_view.setPlaceholderText(tr("log_placeholder"))
+        self._btn_log_bottom.setText(tr("log_bottom"))
+        self._btn_log_clear.setText(tr("log_clear"))
+        self._btn_log_open.setText(tr("log_open"))
 
     def _wrap_scroll(self, *widgets: QWidget) -> QWidget:
         page = QWidget()
@@ -423,9 +489,9 @@ class SettingsWindow(_DraggableMixin, QWidget):
     def _annotate_color_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(8)
-        lab = QLabel("备注译文颜色")
-        lab.setFixedWidth(100)
-        row.addWidget(lab)
+        self._lab_ann_color = QLabel()
+        self._lab_ann_color.setFixedWidth(100)
+        row.addWidget(self._lab_ann_color)
         row.addWidget(self._ann_color_swatch)
         row.addWidget(self._ann_color)
         row.addWidget(self._ann_color_btn)
@@ -451,100 +517,87 @@ class SettingsWindow(_DraggableMixin, QWidget):
 
     def _pick_annotate_color(self):
         cur = QColor(self._normalize_hex_color(self._ann_color.text()))
-        c = QColorDialog.getColor(cur, self, "备注译文颜色")
+        c = QColorDialog.getColor(cur, self, self._tr("ann_color_dlg"))
         if c.isValid():
             self._ann_color.setText(c.name(QColor.NameFormat.HexRgb).upper())
 
     def _page_general(self) -> QWidget:
-        card, lay = _settings_card(
-            "常规",
-            "全局默认目标语言；源语言自动识别。翻译结果窗内也可临时切换。",
-        )
-        lay.addLayout(_form_row("目标语言", self._target))
+        card, lay, self._card_general_title, self._card_general_hint = _settings_card("", "")
+        r1, self._lab_ui_lang = _form_row("", self._ui_lang)
+        lay.addLayout(r1)
+        self._hint_ui_lang = QLabel()
+        self._hint_ui_lang.setWordWrap(True)
+        self._hint_ui_lang.setStyleSheet("color:#aaa;font-size:12px;")
+        lay.addWidget(self._hint_ui_lang)
+        r2, self._lab_target = _form_row("", self._target)
+        lay.addLayout(r2)
         lay.addLayout(self._annotate_color_row())
-        tip = QLabel("备注译文颜色对窗口/区域备注模式均生效，保存后立即应用。")
-        tip.setWordWrap(True)
-        tip.setStyleSheet("color:#aaa;font-size:12px;")
-        lay.addWidget(tip)
+        self._ann_color_note = QLabel()
+        self._ann_color_note.setWordWrap(True)
+        self._ann_color_note.setStyleSheet("color:#aaa;font-size:12px;")
+        lay.addWidget(self._ann_color_note)
         return self._wrap_scroll(card)
 
     def _page_hotkeys(self) -> QWidget:
-        card, lay = _settings_card(
-            "全局热键",
-            "点击输入框后：键盘组合键（需含 Ctrl/Alt/Shift，Esc 取消）；"
-            "或直接按鼠标侧键（侧键1=后退 / 侧键2=前进，也可 Ctrl+侧键）。",
-        )
-        lay.addLayout(_form_row("截屏翻译", self._hk_shot))
-        lay.addLayout(_form_row("划词翻译", self._hk_word))
-        lay.addLayout(_form_row("截图取字", self._hk_ocr))
-        lay.addLayout(_form_row("窗口持续", self._hk_win))
-        lay.addLayout(_form_row("区域实时", self._hk_region))
+        card, lay, self._card_hk_title, self._card_hk_hint = _settings_card("", "")
+        r1, self._lab_hk_shot = _form_row("", self._hk_shot)
+        r2, self._lab_hk_word = _form_row("", self._hk_word)
+        r3, self._lab_hk_ocr = _form_row("", self._hk_ocr)
+        r4, self._lab_hk_win = _form_row("", self._hk_win)
+        r5, self._lab_hk_region = _form_row("", self._hk_region)
+        for r in (r1, r2, r3, r4, r5):
+            lay.addLayout(r)
         return self._wrap_scroll(card)
 
     def _page_window(self) -> QWidget:
-        card, lay = _settings_card(
-            "窗口持续翻译",
-            "字幕条显示在目标窗口外侧不遮挡；备注按行贴在原文旁。",
-        )
-        lay.addLayout(_form_row("监视间隔", self._win_interval))
-        lay.addLayout(_form_row("显示模式", self._win_annotate))
-        tip_card, tip_lay = _settings_card(
-            "备注选项",
-            "仅窗口备注模式生效，与区域设置互不影响。",
-        )
+        card, lay, self._card_win_title, self._card_win_hint = _settings_card("", "")
+        r1, self._lab_win_interval = _form_row("", self._win_interval)
+        r2, self._lab_win_mode = _form_row("", self._win_annotate)
+        lay.addLayout(r1)
+        lay.addLayout(r2)
+        tip_card, tip_lay, self._card_win_ann_title, self._card_win_ann_hint = _settings_card("", "")
         tip_lay.addWidget(self._win_skip_target)
         return self._wrap_scroll(card, tip_card)
 
     def _page_region(self) -> QWidget:
-        card, lay = _settings_card(
-            "区域实时翻译",
-            "识别框可拖顶栏移动、拖边角缩放；点「固定」锁定。",
-        )
-        lay.addLayout(_form_row("监视间隔", self._reg_interval))
-        lay.addLayout(_form_row("显示模式", self._reg_annotate))
-        tip_card, tip_lay = _settings_card(
-            "备注选项",
-            "仅区域备注模式生效，与窗口设置互不影响。",
-        )
+        card, lay, self._card_reg_title, self._card_reg_hint = _settings_card("", "")
+        r1, self._lab_reg_interval = _form_row("", self._reg_interval)
+        r2, self._lab_reg_mode = _form_row("", self._reg_annotate)
+        lay.addLayout(r1)
+        lay.addLayout(r2)
+        tip_card, tip_lay, self._card_reg_ann_title, self._card_reg_ann_hint = _settings_card("", "")
         tip_lay.addWidget(self._reg_skip_target)
         return self._wrap_scroll(card, tip_card)
 
     def _page_advanced(self) -> QWidget:
-        card, lay = _settings_card(
-            "模型与生成",
-            "max_tokens 为单次翻译生成上限；过小可能截断，过大略增延迟。",
-        )
-        lay.addLayout(_form_row("max_tokens", self._max_tokens))
+        card, lay, self._card_adv_title, self._card_adv_hint = _settings_card("", "")
+        r1, self._lab_max_tokens = _form_row("max_tokens", self._max_tokens)
+        lay.addLayout(r1)
         return self._wrap_scroll(card)
 
     def _page_log(self) -> QWidget:
-        card, lay = _settings_card(
-            "运行日志",
-            f"文件：{LOG_PATH.name} · 清空显示不会删除磁盘日志。",
-        )
+        card, lay, self._card_log_title, self._card_log_hint = _settings_card("", "")
         self._log_view = QPlainTextEdit()
         self._log_view.setReadOnly(True)
         self._log_view.setMaximumBlockCount(2000)
-        self._log_view.setPlaceholderText("运行日志将显示在这里…")
         self._log_view.setMinimumHeight(280)
         self._log_view.verticalScrollBar().valueChanged.connect(self._on_log_scroll)
         bar = QHBoxLayout()
-        btn_bottom = QPushButton("滚到底")
-        btn_bottom.setObjectName("ghostBtn")
-        btn_bottom.clicked.connect(self._scroll_log_bottom)
-        btn_clear = QPushButton("清空显示")
-        btn_clear.setObjectName("ghostBtn")
-        btn_clear.clicked.connect(self._log_view.clear)
-        btn_open = QPushButton("打开日志文件")
-        btn_open.setObjectName("ghostBtn")
-        btn_open.clicked.connect(self._open_log_file)
-        bar.addWidget(btn_bottom)
-        bar.addWidget(btn_clear)
-        bar.addWidget(btn_open)
+        self._btn_log_bottom = QPushButton()
+        self._btn_log_bottom.setObjectName("ghostBtn")
+        self._btn_log_bottom.clicked.connect(self._scroll_log_bottom)
+        self._btn_log_clear = QPushButton()
+        self._btn_log_clear.setObjectName("ghostBtn")
+        self._btn_log_clear.clicked.connect(self._log_view.clear)
+        self._btn_log_open = QPushButton()
+        self._btn_log_open.setObjectName("ghostBtn")
+        self._btn_log_open.clicked.connect(self._open_log_file)
+        bar.addWidget(self._btn_log_bottom)
+        bar.addWidget(self._btn_log_clear)
+        bar.addWidget(self._btn_log_open)
         bar.addStretch()
         lay.addLayout(bar)
         lay.addWidget(self._log_view, stretch=1)
-        # 日志页不包 scroll，避免双滚动
         page = QWidget()
         pl = QVBoxLayout(page)
         pl.setContentsMargins(0, 0, 0, 0)
@@ -552,13 +605,12 @@ class SettingsWindow(_DraggableMixin, QWidget):
         return page
 
     def showEvent(self, event):
-        # 每次打开都从当前 cfg 刷新（监视中改模式/翻译窗改语言会写 cfg）
         self.reload_from_cfg()
+        self._apply_i18n()
         self._load_recent_logs()
         super().showEvent(event)
 
     def _load_recent_logs(self):
-        """用内存环 + 文件尾填充面板（避免重复连接时丢历史）。"""
         lines = recent_lines(500)
         self._log_view.setPlainText("\n".join(lines))
         self._scroll_log_bottom()
@@ -575,7 +627,6 @@ class SettingsWindow(_DraggableMixin, QWidget):
 
     def _on_log_scroll(self, value: int):
         bar = self._log_view.verticalScrollBar()
-        # 距底部超过一行高则认为用户在翻历史
         self._log_auto_scroll = value >= bar.maximum() - 4
 
     def _open_log_file(self):
@@ -588,11 +639,18 @@ class SettingsWindow(_DraggableMixin, QWidget):
             os.startfile(str(LOG_PATH))  # type: ignore[attr-defined]
         except Exception as e:
             topmost_message(
-                "information", "日志", f"路径：\n{LOG_PATH}\n\n打开失败：{e}", parent=self
+                "information",
+                self._tr("log_title"),
+                self._tr("log_open_fail", path=str(LOG_PATH), err=e),
+                parent=self,
             )
 
     def reload_from_cfg(self):
         cfg = self._cfg
+        self._lang = "en" if str(cfg.get("ui_language", "zh")).lower().startswith("en") else "zh"
+        self._ui_lang.blockSignals(True)
+        self._ui_lang.setCurrentIndex(1 if self._lang == "en" else 0)
+        self._ui_lang.blockSignals(False)
         self._target.setCurrentText(cfg.get("target_language", "简体中文"))
         self._hk_shot.set_value(cfg["hotkey_screenshot"])
         self._hk_word.set_value(cfg["hotkey_word"])
@@ -622,7 +680,10 @@ class SettingsWindow(_DraggableMixin, QWidget):
     def _save(self):
         from ..hotkeys import find_hotkey_conflicts
 
+        lang = self._ui_lang.currentData() or "zh"
+        self._lang = "en" if str(lang).startswith("en") else "zh"
         draft = {
+            "ui_language": self._lang,
             "target_language": self._target.currentText(),
             "hotkey_screenshot": self._hk_shot.value,
             "hotkey_word": self._hk_word.value,
@@ -642,21 +703,20 @@ class SettingsWindow(_DraggableMixin, QWidget):
         if conflicts:
             topmost_message(
                 "warning",
-                "热键冲突",
-                "以下热键重复，请修改后再保存：\n\n" + "\n".join(conflicts),
+                self._tr("hk_conflict_title"),
+                self._tr("hk_conflict_body", list="\n".join(conflicts)),
                 parent=self,
             )
             return
         self._cfg.update(draft)
-        # 去掉已拆分的旧共用键，避免下次误读
         self._cfg.pop("annotate_skip_target_lang", None)
         config.save(self._cfg)
         if self._on_saved:
             self._on_saved()
-        # 轻量 toast：无模态、不必点确定；在原设置窗中心闪一下
         geo = self.frameGeometry()
+        toast_msg = self._tr("saved_toast")
         self.hide()
-        show_toast("设置已保存", at_rect=geo, msec=1500)
+        show_toast(toast_msg, at_rect=geo, msec=1500)
 
 
 class HistoryWindow(_DraggableMixin, QWidget):

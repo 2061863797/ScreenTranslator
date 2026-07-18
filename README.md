@@ -2,6 +2,8 @@
 
 Windows 本地**离线**托盘工具：截屏翻译、划词翻译、窗口/区域实时翻译。
 
+**English:** [README.en.md](./README.en.md) · [Settings (EN)](./SETTINGS.en.md) · [runtime/README.en.md](./runtime/README.en.md)
+
 | 能力 | 技术 |
 |------|------|
 | 界面 | Python + PySide6 |

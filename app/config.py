@@ -1,0 +1,150 @@
+# -*- coding: utf-8 -*-
+"""全局配置：加载、保存、默认值。"""
+
+import json
+from pathlib import Path
+
+from .paths import (
+    CONFIG_PATH,
+    DEFAULT_LLAMA_REL,
+    DEFAULT_MODEL_REL,
+    resolve_path,
+    to_portable_path,
+)
+
+# 再导出，兼容 from app.config import CONFIG_PATH
+__all__ = ["CONFIG_PATH", "DEFAULTS", "load", "save"]
+
+DEFAULTS = {
+    # llama.cpp / 模型：默认用项目内 runtime/（整夹可带走）
+    "llama_dir": DEFAULT_LLAMA_REL,
+    "model_path": DEFAULT_MODEL_REL,
+    "server_host": "127.0.0.1",
+    "server_port": 8080,
+    "n_gpu_layers": 99,
+    "threads": 8,
+    # 翻译场景 prompt 短：2048 足够，比 4096 省 KV/显存、冷启动更快
+    "ctx_size": 2048,
+    # 单用户短请求：小 batch 即可，过大只占资源
+    "batch_size": 512,
+    "ubatch_size": 256,
+    # 本工具同时只会打一路翻译
+    "parallel_slots": 1,
+    "flash_attn": True,
+    # 模型已基本上 GPU 时 mlock 对推理帮助有限，却会拖慢启动；需要可改 true
+    "mlock": False,
+    # KV 量化：q8_0 在短上下文下几乎无损、更省显存/带宽；空字符串=服务端默认
+    "cache_type_k": "q8_0",
+    "cache_type_v": "q8_0",
+
+    # 翻译
+    "target_language": "简体中文",   # 源语言自动识别，统一译为该语言（翻译窗口内可随时切换）
+    # 单次生成上限；屏幕翻译通常几百 token 内，过大只浪费上限预留
+    "max_tokens": 512,
+
+    # OCR
+    "ocr_lang": None,                # None = PP-OCRv5 自动多语种
+    # 识别前长边缩放到此像素（0=不缩放）；4K 截屏可明显降 OCR 耗时
+    "ocr_max_side": 1600,
+    # 低于此置信度的 OCR 行丢弃（0~1，0=不丢）
+    "ocr_score_min": 0.45,
+
+    # 热键
+    "hotkey_screenshot": "<alt>+q",  # 截屏翻译
+    "hotkey_word": "<alt>+w",        # 划词翻译
+    "hotkey_window": "<alt>+e",      # 窗口持续翻译
+    "hotkey_silent_ocr": "<alt>+s",  # 截图取字（不翻译）
+    "hotkey_region_watch": "<alt>+r",  # 框选区域实时翻译
+
+    # 窗口持续翻译（与区域分开）
+    "window_watch_interval_ms": 800,
+    "window_watch_diff_threshold": 0.9,
+    "window_watch_annotate": False,   # True=备注，False=字幕条
+    # 备注模式：跳过已是目标语言的行（窗口 / 区域各自独立）
+    "window_annotate_skip_target_lang": False,
+
+    # 区域持续翻译
+    "region_watch_interval_ms": 800,
+    "region_watch_diff_threshold": 0.9,
+    "region_watch_annotate": True,    # 区域默认备注更直观
+    "region_annotate_skip_target_lang": False,
+
+    # 备注模式译文颜色（窗口/区域共用，#RRGGBB）
+    "annotate_text_color": "#00F0FF",
+}
+
+
+def _migrate_legacy(cfg: dict, raw: dict) -> None:
+    """旧版共用 watch_* 迁移到 window_/region_ 前缀（仅当新键未在文件中出现时）。"""
+    if "watch_interval_ms" in raw:
+        v = int(raw["watch_interval_ms"])
+        if "window_watch_interval_ms" not in raw:
+            cfg["window_watch_interval_ms"] = v
+        if "region_watch_interval_ms" not in raw:
+            cfg["region_watch_interval_ms"] = v
+    if "watch_diff_threshold" in raw:
+        v = float(raw["watch_diff_threshold"])
+        if "window_watch_diff_threshold" not in raw:
+            cfg["window_watch_diff_threshold"] = v
+        if "region_watch_diff_threshold" not in raw:
+            cfg["region_watch_diff_threshold"] = v
+    if "watch_annotate" in raw:
+        v = bool(raw["watch_annotate"])
+        if "window_watch_annotate" not in raw:
+            cfg["window_watch_annotate"] = v
+        if "region_watch_annotate" not in raw:
+            cfg["region_watch_annotate"] = v
+    # 旧版共用「跳过目标语」→ 拆成窗口/区域（仅新键未写入文件时）
+    if "annotate_skip_target_lang" in raw:
+        v = bool(raw["annotate_skip_target_lang"])
+        if "window_annotate_skip_target_lang" not in raw:
+            cfg["window_annotate_skip_target_lang"] = v
+        if "region_annotate_skip_target_lang" not in raw:
+            cfg["region_annotate_skip_target_lang"] = v
+
+
+def _prefer_bundled_runtime(cfg: dict) -> None:
+    """配置里的绝对路径失效时，自动切到项目内 runtime/。"""
+    for key, rel in (
+        ("llama_dir", DEFAULT_LLAMA_REL),
+        ("model_path", DEFAULT_MODEL_REL),
+    ):
+        cur = cfg.get(key) or ""
+        try:
+            ok = resolve_path(cur).exists()
+        except OSError:
+            ok = False
+        if ok:
+            continue
+        bundled = resolve_path(rel)
+        if bundled.exists():
+            cfg[key] = rel
+
+
+def load() -> dict:
+    """读取配置，缺失项用默认值补齐。路径可写相对 ROOT 的 runtime/…。"""
+    cfg = dict(DEFAULTS)
+    raw: dict = {}
+    if CONFIG_PATH.exists():
+        try:
+            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            cfg.update(raw)
+        except (json.JSONDecodeError, OSError):
+            pass  # 配置损坏时回退默认值，不阻塞启动
+    _migrate_legacy(cfg, raw)
+    # 迁移后内存里可去掉旧共用键（磁盘仍保留到下次 save）
+    if "window_annotate_skip_target_lang" in cfg and "region_annotate_skip_target_lang" in cfg:
+        cfg.pop("annotate_skip_target_lang", None)
+    _prefer_bundled_runtime(cfg)
+    return cfg
+
+
+def save(cfg: dict) -> None:
+    # 不再写回已拆分的旧键；模型路径尽量写成相对 ROOT，方便整夹拷贝
+    data = {k: v for k, v in cfg.items() if k != "annotate_skip_target_lang"}
+    for key in ("llama_dir", "model_path"):
+        if key in data and data[key]:
+            data[key] = to_portable_path(data[key])
+    CONFIG_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )

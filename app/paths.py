@@ -1,0 +1,78 @@
+# -*- coding: utf-8 -*-
+"""项目根路径、便携 runtime 与运行期数据文件位置。
+
+目录约定（一文件夹可带走）::
+
+    <ROOT>/
+      run.py / 翻译.exe / venv / app / config.json
+      runtime/
+        llama/          # llama-server.exe + 依赖 DLL
+        models/         # HY-MT 等 .gguf
+        paddlex/        # PaddleX 缓存（含 official_models）
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+# app/ 的上一级 = 软件根目录
+ROOT = Path(__file__).resolve().parent.parent
+
+CONFIG_PATH = ROOT / "config.json"
+LOG_PATH = ROOT / "app.log"
+DB_PATH = ROOT / "data.db"
+ICON_ICO = ROOT / "icon.ico"
+
+# 内置资源（相对 ROOT，写入 config 时用正斜杠）
+RUNTIME_DIR = ROOT / "runtime"
+RUNTIME_LLAMA = RUNTIME_DIR / "llama"
+RUNTIME_MODELS = RUNTIME_DIR / "models"
+RUNTIME_PADDLEX = RUNTIME_DIR / "paddlex"
+DEFAULT_GGUF_NAME = "HY-MT1.5-1.8B-Q4_K_M.gguf"
+DEFAULT_MODEL_REL = f"runtime/models/{DEFAULT_GGUF_NAME}"
+DEFAULT_LLAMA_REL = "runtime/llama"
+
+
+def resolve_path(value: str | Path) -> Path:
+    """相对路径相对于 ROOT；绝对路径原样 resolve。"""
+    p = Path(value)
+    if not p.is_absolute():
+        p = ROOT / p
+    return p.resolve()
+
+
+def to_portable_path(value: str | Path) -> str:
+    """若在 ROOT 下则存相对路径（正斜杠），便于整夹拷贝。"""
+    p = Path(value)
+    if not p.is_absolute():
+        # 已是相对：规范化分隔符
+        return str(Path(value)).replace("\\", "/")
+    p = p.resolve()
+    try:
+        return str(p.relative_to(ROOT)).replace("\\", "/")
+    except ValueError:
+        return str(p)
+
+
+def setup_runtime_env() -> None:
+    """在导入 Paddle / 启动服务前调用：把 OCR 缓存指到项目内 runtime/paddlex。"""
+    if RUNTIME_PADDLEX.is_dir():
+        # 官方模型目录：runtime/paddlex/official_models/...
+        os.environ["PADDLE_PDX_CACHE_HOME"] = str(RUNTIME_PADDLEX)
+    # 部分旧路径也会读 HUB_HOME，一并指到 paddlex 上一级更稳
+    # 不强制覆盖用户已显式设置的值以外的：上面已固定便携路径
+
+
+def runtime_status() -> dict:
+    """诊断用：内置资源是否齐全。"""
+    gguf = RUNTIME_MODELS / DEFAULT_GGUF_NAME
+    return {
+        "root": str(ROOT),
+        "llama_server": (RUNTIME_LLAMA / "llama-server.exe").is_file(),
+        "model": gguf.is_file(),
+        "paddlex_models": (RUNTIME_PADDLEX / "official_models").is_dir(),
+        "llama_dir": str(RUNTIME_LLAMA),
+        "model_path": str(gguf),
+        "paddlex": str(RUNTIME_PADDLEX),
+    }

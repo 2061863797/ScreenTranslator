@@ -33,11 +33,11 @@ Windows **offline** tray app: screenshot translation, selection (word) translati
 
 | Method | Notes |
 |--------|--------|
-| **① Release zip (recommended)** | Open **[Releases](../../releases)**, download `runtime-*.zip`, **extract into the project root** → `runtime\models`, `runtime\llama`, `runtime\paddlex` |
+| **① Release zip (recommended)** | GitHub repo page → **Releases** → download `runtime-*.zip` → **extract into project root** → `runtime\models`, `runtime\llama`, `runtime\paddlex` |
 | ② Script | `.\scripts\download_runtime.ps1` or `.\setup.ps1 -DownloadRuntime` |
 | ③ Manual | See [runtime/README.en.md](./runtime/README.en.md) |
 
-**Large files are not in Git** (no Git LFS).  
+**Large files are not in the Git repo** — only via Release (or scripts/manual).  
 **Not in the zip / not in Git:** `venv/`, `config.json`, history DB, logs — create with `setup.ps1` on each PC.
 
 ---
@@ -154,8 +154,8 @@ Only **one** continuous session at a time; switch **Subtitle ↔ Annotation** fr
 
 | Issue | Fix |
 |-------|-----|
-| Model file only a few KB | Download **Release `runtime-*.zip`** into project root |
-| Missing runtime | Releases asset, not “Source code” zip |
+| Missing / tiny model file | Download **Release `runtime-*.zip`** and extract to project root |
+| Missing runtime | Use Release assets, not the “Source code” zip |
 | No paddlepaddle wheel | Use Python **3.12**, not 3.14 |
 | llama fails on GPU | `n_gpu_layers: 0` or CPU llama build |
 | Hotkeys dead | Rebind in Settings; try `mouse.x1` |

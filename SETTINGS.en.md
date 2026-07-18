@@ -11,7 +11,7 @@ This switches **all** UI: tray menu, Settings, History, translate window, window
 
 | Option | Config key | Description |
 |--------|------------|-------------|
-| **UI language** | `ui_language` | `zh` / `en` — Settings window labels only (not OCR/target language). |
+| **UI language** | `ui_language` | `zh` / `en` — tray + Settings + History + floating bars (not OCR/target language names). |
 | **Target language** | `target_language` | Default translation target (e.g. 简体中文, English). Source is auto-detected. |
 | **Annotation color** | `annotate_text_color` | Hex `#RRGGBB` for annotation-mode translation text (window & region). |
 

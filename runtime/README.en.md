@@ -6,7 +6,7 @@ Model + llama + OCR ≈ **2 GB**. **Not stored in Git.** Get them from **GitHu
 
 | Priority | Method |
 |----------|--------|
-| **Recommended** | Repo **Releases** → download **`runtime-*.zip`** → extract into **project root** (next to `run.py`) |
+| **Recommended** | GitHub **Releases** (repo page) → download **`runtime-*.zip`** → extract into **project root** (next to `run.py`) |
 | Alternative | `.\scripts\download_runtime.ps1` or `.\setup.ps1 -DownloadRuntime` |
 | Alternative | Manual links below |
 

@@ -77,34 +77,78 @@ class Translator:
         while len(self._line_cache) > self._line_cache_max:
             self._line_cache.popitem(last=False)
 
-    def translate(self, text: str, target_language: str = "简体中文") -> str:
-        """自动识别源语言，翻译为 target_language。"""
-        text = text.strip()
+    @staticmethod
+    def _sanitize(text: str) -> str:
+        """去掉 NUL/控制符，避免异常请求。"""
         if not text:
             return ""
+        # 保留换行/制表，去掉其它 C0 控制符与 NUL
+        out = []
+        for ch in text:
+            o = ord(ch)
+            if ch in "\n\r\t":
+                out.append(ch)
+            elif o >= 32 or o == 0x09:
+                out.append(ch)
+        return "".join(out).strip()
+
+    def _ctx_budget(self) -> tuple[int, int]:
+        """返回 (上下文 token 上限, 留给生成的 max_tokens 上限)。"""
+        ctx = int(self._cfg.get("ctx_size", 2048) or 2048)
+        ctx = max(512, min(ctx, 131072))
+        cap = int(self._cfg.get("max_tokens", 512) or 512)
+        cap = max(64, min(cap, 8192, ctx // 2))
+        return ctx, cap
+
+    @staticmethod
+    def _est_tokens(s: str) -> int:
+        """粗估 token 数（中英混排偏保守，略高估防 400）。"""
+        if not s:
+            return 0
+        # 约 1.5 字/ token 不够保守；用 1 字≈1 token 再加 10%
+        return max(1, int(len(s) * 1.1) + 8)
+
+    def _clip_text_for_ctx(self, text: str, template_overhead: int) -> str:
+        """按 n_ctx 截断原文，为提示模板与生成留空。
+
+        llama-server 在 prompt+生成 超过 n_ctx 时直接 400 exceed_context_size_error。
+        """
+        ctx, gen_cap = self._ctx_budget()
+        # 提示固定开销 + 生成预留 + 安全余量
+        reserve = template_overhead + gen_cap + 64
+        budget_tok = max(128, ctx - reserve)
+        # 字符预算：略小于 token 预算（中文偏 1:1）
+        budget_chars = max(200, budget_tok)
+        if len(text) <= budget_chars:
+            return text
+        clipped = text[:budget_chars].rstrip()
+        _log.warning(
+            "原文过长已截断 chars=%d→%d ctx=%d gen_cap=%d",
+            len(text), len(clipped), ctx, gen_cap,
+        )
+        return clipped + "\n…"
+
+    def translate(self, text: str, target_language: str = "简体中文") -> str:
+        """自动识别源语言，翻译为 target_language。"""
+        text = self._sanitize(text)
+        if not text:
+            return ""
+        # 模板开销粗估
+        overhead = self._est_tokens(
+            _PROMPT_ZH.format(target=target_language, text="")
+        )
+        text = self._clip_text_for_ctx(text, overhead)
         if "中文" in target_language:
             prompt = _PROMPT_ZH.format(target=target_language, text=text)
         else:
             en_name = _LANG_EN_NAME.get(target_language, target_language)
             prompt = _PROMPT_EN.format(target=en_name, text=text)
 
-        max_tokens = self._effective_max_tokens(text)
-
+        max_tokens = self._effective_max_tokens(text, prompt)
         preview = text.replace("\n", " ")[:80]
         t0 = time.time()
         try:
-            resp = self._session.post(
-                f"{self.base_url}/v1/chat/completions",
-                json={
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.1,   # 翻译任务用低温度保证稳定
-                    "top_p": 0.8,
-                    "max_tokens": max_tokens,
-                },
-                timeout=self.timeout,
-            )
-            resp.raise_for_status()
-            out = resp.json()["choices"][0]["message"]["content"].strip()
+            out = self._chat(prompt, max_tokens)
             _log.info(
                 "翻译成功 target=%s max_tokens=%s chars=%d→%d %.2fs | %s",
                 target_language, max_tokens, len(text), len(out),
@@ -113,35 +157,72 @@ class Translator:
             return out
         except Exception as e:
             _log.error(
-                "翻译失败 target=%s max_tokens=%s %.2fs | %s | %s",
-                target_language, max_tokens, time.time() - t0, preview, e,
+                "翻译失败 target=%s max_tokens=%s chars=%d %.2fs | %s | %s",
+                target_language, max_tokens, len(text),
+                time.time() - t0, preview, e,
             )
             raise
 
-    def _effective_max_tokens(self, text: str) -> int:
-        """按配置上限，并结合原文长度收紧，避免过长预留拖慢调度。"""
-        cap = int(self._cfg.get("max_tokens", 512))
-        cap = max(64, min(cap, 8192))
-        # 中英混排粗估：译文通常不长于原文的 ~2 倍 + 余量
+    def _effective_max_tokens(self, text: str, prompt: str | None = None) -> int:
+        """按配置与上下文剩余空间收紧 max_tokens，避免超 n_ctx。"""
+        ctx, cap = self._ctx_budget()
+        # 按原文长度估生成量，但不超过 cap
         est = max(64, min(cap, len(text) * 2 + 64))
-        return est
+        if prompt is not None:
+            used = self._est_tokens(prompt)
+            room = max(64, ctx - used - 32)
+            est = min(est, room)
+        return max(64, est)
+
+    def _chat(self, prompt: str, max_tokens: int) -> str:
+        """发 chat/completions；失败时带上服务端错误正文。"""
+        # 二次保险：若仍可能超上下文，再砍生成长度
+        ctx, _ = self._ctx_budget()
+        used = self._est_tokens(prompt)
+        if used + max_tokens + 8 > ctx:
+            max_tokens = max(64, ctx - used - 8)
+        if used + 64 > ctx:
+            # 提示本身过大：硬截断 prompt 尾部
+            keep = max(200, int((ctx - 128) / 1.1))
+            prompt = prompt[:keep] + "\n…"
+            max_tokens = max(64, min(max_tokens, 256))
+            _log.warning("提示过长再次截断 prompt_chars≈%d", len(prompt))
+
+        resp = self._session.post(
+            f"{self.base_url}/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+                "top_p": 0.8,
+                "max_tokens": int(max_tokens),
+            },
+            timeout=self.timeout,
+        )
+        if not resp.ok:
+            detail = (resp.text or "").strip().replace("\n", " ")
+            if len(detail) > 400:
+                detail = detail[:400] + "…"
+            raise RuntimeError(
+                f"llama-server HTTP {resp.status_code}: {detail or resp.reason}"
+            )
+        data = resp.json()
+        return data["choices"][0]["message"]["content"].strip()
 
     def _translate_prompt(self, prompt: str, target_language: str, preview: str) -> str:
-        max_tokens = self._effective_max_tokens(preview)
+        prompt = self._sanitize(prompt)
+        # 多行提示也可能超长
+        overhead = 32
+        # 用整段 prompt 当「原文」裁剪：保留模板头
+        if self._est_tokens(prompt) > self._ctx_budget()[0] // 2:
+            # 从末尾保留模板前缀约 80 字 + 中间正文
+            head = prompt[:120]
+            body = prompt[120:]
+            body = self._clip_text_for_ctx(body, overhead + self._est_tokens(head))
+            prompt = head + body
+        max_tokens = self._effective_max_tokens(preview, prompt)
         t0 = time.time()
         try:
-            resp = self._session.post(
-                f"{self.base_url}/v1/chat/completions",
-                json={
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.1,
-                    "top_p": 0.8,
-                    "max_tokens": max_tokens,
-                },
-                timeout=self.timeout,
-            )
-            resp.raise_for_status()
-            out = resp.json()["choices"][0]["message"]["content"].strip()
+            out = self._chat(prompt, max_tokens)
             _log.info(
                 "翻译成功 target=%s chars~%d→%d %.2fs | %s",
                 target_language, len(preview), len(out),

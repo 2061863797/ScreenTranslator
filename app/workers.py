@@ -52,7 +52,9 @@ class OcrTranslateWorker(QThread):
 
             if not source:
                 _log.warning("worker 未识别到文字")
-                self.failed.emit("未识别到文字")
+                from .i18n import t
+
+                self.failed.emit(t("msg_no_text"))
                 return
 
             translation = ""

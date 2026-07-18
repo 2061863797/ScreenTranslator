@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..i18n import t as _t
 from .theme import (
     ACCENT_QCOLOR,
     BORDER_QCOLOR,
@@ -148,6 +149,14 @@ class SubtitleBar(_CaptureExcludedMixin, QWidget):
         self._vscroll = _SubtitleVScroll(self)
         self._grip = _SubtitleResizeGrip(self)
         self.resize(self._MIN_W, self._DEFAULT_H)
+
+    def apply_ui_language(self):
+        self._ctrl.apply_ui_language()
+        try:
+            self._grip.apply_ui_language()
+        except Exception:
+            pass
+        self._place_chrome()
 
     def set_interactive(self, on: bool):
         """字幕模式：显示右下角缩放；译文层始终穿透。"""
@@ -414,9 +423,12 @@ class _SubtitleResizeGrip(_CaptureExcludedMixin, QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(bar._GRIP, bar._GRIP)
         self.setCursor(Qt.CursorShape.SizeFDiagCursor)
-        self.setToolTip("拖动缩放译文框")
         self._bar = bar
         self._origin: tuple | None = None
+        self.apply_ui_language()
+
+    def apply_ui_language(self):
+        self.setToolTip(_t("sub_resize_tip"))
 
     def paintEvent(self, event):
         # 与翻译窗右下角 QSizeGrip 同形态：三道白斜线，深色底上可见
@@ -465,16 +477,13 @@ class _SubtitleCtrl(_CaptureExcludedMixin, QWidget):
         lay = QHBoxLayout(container)
         lay.setContentsMargins(6, 3, 6, 3)
         lay.setSpacing(4)
-        handle = QLabel("⠿")
-        handle.setStyleSheet(
+        self._handle = QLabel("⠿")
+        self._handle.setStyleSheet(
             "color:#fff;font-size:14px;padding:0 2px;background:transparent;"
         )
-        handle.setToolTip("自由模式下拖动移动字幕")
-        lay.addWidget(handle)
-        for key, text in [
-            ("follow", "跟随"), ("free", "自由"), ("pinned", "固定"),
-        ]:
-            btn = QPushButton(text)
+        lay.addWidget(self._handle)
+        for key in ("follow", "free", "pinned"):
+            btn = QPushButton()
             btn.setCheckable(True)
             btn.setFixedHeight(20)
             btn.clicked.connect(
@@ -482,21 +491,31 @@ class _SubtitleCtrl(_CaptureExcludedMixin, QWidget):
             )
             self._btns[key] = btn
             lay.addWidget(btn)
-        btn_ann = QPushButton("备注")
-        btn_ann.setFixedHeight(20)
-        btn_ann.setToolTip("切换为备注模式（贴在原文旁）")
-        btn_ann.clicked.connect(self._bar.switch_to_annotate.emit)
-        lay.addWidget(btn_ann)
-        btn_close = QPushButton("关闭")
-        btn_close.setFixedHeight(20)
-        btn_close.setToolTip("停止持续翻译并关闭字幕")
-        btn_close.clicked.connect(self._bar.stop_requested.emit)
-        lay.addWidget(btn_close)
+        self._btn_ann = QPushButton()
+        self._btn_ann.setFixedHeight(20)
+        self._btn_ann.clicked.connect(self._bar.switch_to_annotate.emit)
+        lay.addWidget(self._btn_ann)
+        self._btn_close = QPushButton()
+        self._btn_close.setFixedHeight(20)
+        self._btn_close.clicked.connect(self._bar.stop_requested.emit)
+        lay.addWidget(self._btn_close)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(container)
         self.setStyleSheet(CTRL_STYLE)
         self.sync_checked(bar.mode)
+        self.apply_ui_language()
+
+    def apply_ui_language(self):
+        self._handle.setToolTip(_t("sub_drag_tip"))
+        self._btns["follow"].setText(_t("sub_follow"))
+        self._btns["free"].setText(_t("sub_free"))
+        self._btns["pinned"].setText(_t("sub_pinned"))
+        self._btn_ann.setText(_t("sub_annotate"))
+        self._btn_ann.setToolTip(_t("sub_annotate_tip"))
+        self._btn_close.setText(_t("sub_close"))
+        self._btn_close.setToolTip(_t("sub_close_tip"))
+        self.adjustSize()
 
     def sync_checked(self, mode: str):
         for k, btn in self._btns.items():
@@ -732,9 +751,9 @@ class RegionWatchFrame(_CaptureExcludedMixin, QWidget):
         painter.fillRect(0, 0, w, self._BAR_H, PANEL_QCOLOR)
         painter.setPen(MUTED_QCOLOR)
         if self._pinned:
-            title = "已固定 · 点右侧解锁"
+            title = _t("frame_pinned")
         else:
-            title = "⠿ 拖动 · 拖边角缩放识别区"
+            title = _t("frame_drag")
         painter.drawText(
             8, 0, max(0, w - self._PIN_W - 16), self._BAR_H,
             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
@@ -747,7 +766,7 @@ class RegionWatchFrame(_CaptureExcludedMixin, QWidget):
         painter.setPen(TEXT_QCOLOR)
         painter.drawText(
             pr, Qt.AlignmentFlag.AlignCenter,
-            "已固定" if self._pinned else "固定",
+            _t("frame_pin_on") if self._pinned else _t("frame_pin_off"),
         )
         # 识别区外框（浅色描边，不抢戏）
         painter.setPen(QPen(BORDER_QCOLOR, 2))
@@ -778,30 +797,36 @@ class AnnotateCtrl(_CaptureExcludedMixin, QWidget):
         lay = QHBoxLayout(container)
         lay.setContentsMargins(8, 3, 8, 3)
         lay.setSpacing(6)
-        tip = QLabel("备注")
-        lay.addWidget(tip)
-        btn_sub = QPushButton("字幕")
-        btn_sub.setFixedHeight(20)
-        btn_sub.setToolTip("切换为字幕条模式（目标外侧）")
-        btn_sub.clicked.connect(self.switch_to_subtitle.emit)
-        lay.addWidget(btn_sub)
-        self._btn_skip = QPushButton("跳过目标语")
+        self._tip = QLabel()
+        lay.addWidget(self._tip)
+        self._btn_sub = QPushButton()
+        self._btn_sub.setFixedHeight(20)
+        self._btn_sub.clicked.connect(self.switch_to_subtitle.emit)
+        lay.addWidget(self._btn_sub)
+        self._btn_skip = QPushButton()
         self._btn_skip.setCheckable(True)
         self._btn_skip.setFixedHeight(20)
-        self._btn_skip.setToolTip(
-            "开启后：已是目标语言的行不再翻译、不显示备注标签"
-        )
         self._btn_skip.clicked.connect(self._on_skip_clicked)
         lay.addWidget(self._btn_skip)
-        btn_close = QPushButton("关闭")
-        btn_close.setFixedHeight(20)
-        btn_close.setToolTip("停止持续翻译")
-        btn_close.clicked.connect(self.stop_requested.emit)
-        lay.addWidget(btn_close)
+        self._btn_close = QPushButton()
+        self._btn_close.setFixedHeight(20)
+        self._btn_close.clicked.connect(self.stop_requested.emit)
+        lay.addWidget(self._btn_close)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(container)
         self.setStyleSheet(CTRL_STYLE)
+        self.apply_ui_language()
+
+    def apply_ui_language(self):
+        self._tip.setText(_t("ann_label"))
+        self._btn_sub.setText(_t("ann_subtitle"))
+        self._btn_sub.setToolTip(_t("ann_subtitle_tip"))
+        self._btn_skip.setText(_t("ann_skip"))
+        self._btn_skip.setToolTip(_t("ann_skip_tip"))
+        self._btn_close.setText(_t("sub_close"))
+        self._btn_close.setToolTip(_t("ann_close_tip"))
+        self.adjustSize()
 
     def _on_skip_clicked(self):
         self.skip_target_changed.emit(self._btn_skip.isChecked())

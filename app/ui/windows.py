@@ -36,7 +36,8 @@ from .theme import (
     SETTINGS_STYLE,
     apply_frameless_float,
 )
-from .settings_i18n import t as _tr
+from ..i18n import get_language, set_language, t as _ti
+from ..i18n import t_lang
 from .topmost import ensure_stays_on_top, raise_to_front, show_toast, topmost_message
 
 LANGUAGES = [
@@ -58,12 +59,15 @@ class HotkeyEdit(QLineEdit):
     def __init__(self, pynput_str: str):
         super().__init__()
         self.setReadOnly(True)
-        self.setPlaceholderText("点击后按快捷键或鼠标侧键…")
         self._value = pynput_str
-        self.setText(self._display(pynput_str))
+        self.apply_ui_language()
         # 接收侧键（Back/Forward）
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def apply_ui_language(self):
+        self.setPlaceholderText(_ti("hk_placeholder"))
+        self.setText(self._display(self._value))
 
     @property
     def value(self) -> str:
@@ -75,7 +79,7 @@ class HotkeyEdit(QLineEdit):
         self.setText(self._display(pynput_str))
 
     def focusInEvent(self, event):
-        self.setText("请按快捷键或鼠标侧键…")
+        self.setText(_ti("hk_press"))
         super().focusInEvent(event)
 
     def focusOutEvent(self, event):
@@ -134,7 +138,7 @@ class HotkeyEdit(QLineEdit):
             return
         if not parts:
             # 无修饰键的裸键盘键太容易误触；鼠标侧键允许单独
-            self.setText("键盘请加 Ctrl/Alt/Shift；侧键可直接按…")
+            self.setText(_ti("hk_need_mod"))
             return
         parts.append(main)
         self._commit(parts)
@@ -176,12 +180,12 @@ class HotkeyEdit(QLineEdit):
         names = {
             "<ctrl>": "Ctrl", "<alt>": "Alt", "<shift>": "Shift", "<cmd>": "Win",
             "<space>": "Space", "<tab>": "Tab", "<enter>": "Enter",
-            "mouse.x1": "侧键1(后退)",
-            "mouse.x2": "侧键2(前进)",
-            "mouse.button4": "侧键1(后退)",
-            "mouse.button5": "侧键2(前进)",
-            "mouse.back": "侧键1(后退)",
-            "mouse.forward": "侧键2(前进)",
+            "mouse.x1": _ti("mouse_x1"),
+            "mouse.x2": _ti("mouse_x2"),
+            "mouse.button4": _ti("mouse_x1"),
+            "mouse.button5": _ti("mouse_x2"),
+            "mouse.back": _ti("mouse_x1"),
+            "mouse.forward": _ti("mouse_x2"),
         }
         out = []
         for p in (pynput_str or "").split("+"):
@@ -384,7 +388,7 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._load_recent_logs()
 
     def _tr(self, key: str, **kwargs) -> str:
-        return _tr(self._lang, key, **kwargs)
+        return t_lang(self._lang, key, **kwargs)
 
     def _apply_i18n(self):
         tr = self._tr
@@ -727,17 +731,14 @@ class HistoryWindow(_DraggableMixin, QWidget):
 
     def __init__(self, storage, on_open=None):
         super().__init__()
-        self.setWindowTitle("翻译历史")
         apply_frameless_float(self)
         self.resize(640, 420)
         self.setMinimumSize(400, 260)
         ensure_stays_on_top(self)
         self._storage = storage
-        # on_open(source, translation) → 通常送入翻译窗口
         self._on_open = on_open
 
         self._table = QTableWidget(0, 2)
-        self._table.setHorizontalHeaderLabels(["原文", "译文"])
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.setColumnWidth(0, 280)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -745,16 +746,16 @@ class HistoryWindow(_DraggableMixin, QWidget):
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._table.cellDoubleClicked.connect(self._on_double_click)
 
-        tip = QLabel("双击一行可在翻译窗口中打开")
+        self._tip = QLabel()
 
         title_bar = QHBoxLayout()
         title_bar.setContentsMargins(4, 2, 2, 2)
-        title_lbl = QLabel("翻译历史")
-        title_lbl.setStyleSheet("font-size:14px;font-weight:600;")
+        self._title_lbl = QLabel()
+        self._title_lbl.setStyleSheet("font-size:14px;font-weight:600;")
         btn_close = QPushButton("×")
         btn_close.setFixedWidth(28)
         btn_close.clicked.connect(self.hide)
-        title_bar.addWidget(title_lbl)
+        title_bar.addWidget(self._title_lbl)
         title_bar.addStretch()
         title_bar.addWidget(btn_close)
 
@@ -765,7 +766,7 @@ class HistoryWindow(_DraggableMixin, QWidget):
         inner.setSpacing(8)
         inner.addLayout(title_bar)
         inner.addWidget(self._table, stretch=1)
-        inner.addWidget(tip)
+        inner.addWidget(self._tip)
         grip_row = QHBoxLayout()
         grip_row.setContentsMargins(0, 0, 0, 0)
         grip_row.addStretch()
@@ -776,8 +777,16 @@ class HistoryWindow(_DraggableMixin, QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(container)
         self.setStyleSheet(FLOAT_PANEL_STYLE)
+        self.apply_ui_language()
+
+    def apply_ui_language(self):
+        self.setWindowTitle(_ti("hist_title"))
+        self._title_lbl.setText(_ti("hist_title"))
+        self._tip.setText(_ti("hist_tip"))
+        self._table.setHorizontalHeaderLabels([_ti("hist_src"), _ti("hist_dst")])
 
     def showEvent(self, event):
+        self.apply_ui_language()
         rows = [(r[1], r[2]) for r in self._storage.recent_history()]
         self._table.setRowCount(len(rows))
         for r, (src, dst) in enumerate(rows):
@@ -839,33 +848,31 @@ class InputTranslateWindow(_DraggableMixin, QWidget):
         self._block_lang_signal = False
 
         self._input = QTextEdit()
-        self._input.setPlaceholderText("输入任意语言的文本，或用划词/截屏热键送入…")
         self._output = QTextEdit(readOnly=True)
-        self._output.setPlaceholderText("译文")
 
         self._lang = QComboBox()
         self._lang.addItems(LANGUAGES)
         self._lang.setCurrentText(cfg.get("target_language", "简体中文"))
-        # 切语言：写回 cfg（持续监视共用）并自动重翻
         self._lang.currentTextChanged.connect(self._on_lang_changed)
 
-        self._btn_pin = QPushButton("固定")
+        self._btn_pin = QPushButton()
         self._btn_pin.setCheckable(True)
         self._btn_pin.toggled.connect(self._toggle_pin)
-        btn_go = QPushButton("翻译")
-        btn_copy = QPushButton("复制")
+        self._btn_go = QPushButton()
+        self._btn_copy = QPushButton()
         btn_close = QPushButton("×")
         btn_close.setFixedWidth(28)
-        btn_go.clicked.connect(self._go)
-        btn_copy.clicked.connect(self._copy)
+        self._btn_go.clicked.connect(self._go)
+        self._btn_copy.clicked.connect(self._copy)
         btn_close.clicked.connect(self.hide)
 
         bar = QHBoxLayout()
-        bar.addWidget(QLabel("译成："))
+        self._lab_to = QLabel()
+        bar.addWidget(self._lab_to)
         bar.addWidget(self._lang)
         bar.addStretch()
-        bar.addWidget(btn_go)
-        bar.addWidget(btn_copy)
+        bar.addWidget(self._btn_go)
+        bar.addWidget(self._btn_copy)
         bar.addWidget(self._btn_pin)
         bar.addWidget(btn_close)
 
@@ -898,10 +905,22 @@ class InputTranslateWindow(_DraggableMixin, QWidget):
             "border:none;border-radius:4px;padding:4px 10px;}"
             "QPushButton:checked{background:rgba(0,150,255,150);}"
         )
+        self.apply_ui_language()
+
+    def apply_ui_language(self):
+        self.setWindowTitle(_ti("tw_title"))
+        self._lab_to.setText(_ti("tw_to"))
+        self._input.setPlaceholderText(_ti("tw_placeholder"))
+        self._output.setPlaceholderText(_ti("tw_out_ph"))
+        self._btn_go.setText(_ti("tw_translate"))
+        self._btn_copy.setText(_ti("tw_copy"))
+        self._btn_pin.setText(
+            _ti("tw_pinned") if self._pinned else _ti("tw_pin")
+        )
 
     def _toggle_pin(self, checked: bool):
         self._pinned = checked
-        self._btn_pin.setText("已固定" if checked else "固定")
+        self._btn_pin.setText(_ti("tw_pinned") if checked else _ti("tw_pin"))
 
     def _on_lang_changed(self, lang: str):
         if self._block_lang_signal:
@@ -953,15 +972,15 @@ class InputTranslateWindow(_DraggableMixin, QWidget):
         if self._worker and self._worker.isRunning():
             return  # 上一个请求还没回来，不叠加
         if self._ensure_server is not None and not self._ensure_server():
-            self._output.setPlainText("翻译服务未就绪")
+            self._output.setPlainText(_ti("tw_server_fail"))
             return
-        self._output.setPlainText("翻译中…")
+        self._output.setPlainText(_ti("tw_busy"))
         self._worker = _TranslateWorker(
             self._translator, text, self._lang.currentText(), parent=self
         )
         self._worker.done.connect(self._output.setPlainText)
         self._worker.failed.connect(
-            lambda e: self._output.setPlainText(f"翻译失败：{e}")
+            lambda e: self._output.setPlainText(_ti("tw_fail", e=e))
         )
         self._worker.start()
 

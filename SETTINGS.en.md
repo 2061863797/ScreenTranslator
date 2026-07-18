@@ -3,6 +3,8 @@
 Chinese UI is default. Open **Settings** from the tray → **General → UI language → English** → **Save settings**.  
 Config key: `ui_language` = `zh` | `en`.
 
+This switches **all** UI: tray menu, Settings, History, translate window, window picker, subtitle/annotation control bars (not OCR/target language names).
+
 ---
 
 ## General

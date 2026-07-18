@@ -15,6 +15,7 @@ from . import capture, config
 from . import __version__
 from .applog import LOG_PATH, get_logger, setup_logging
 from .hotkeys import HotkeyManager
+from .i18n import get_language, set_language, t as _t
 from .llama_server import LlamaServer
 from .ocr_engine import OcrEngine
 from .paths import ICON_ICO
@@ -73,12 +74,14 @@ class App:
         self.qapp.setQuitOnLastWindowClosed(False)
 
         self.cfg = config.load()
+        set_language(self.cfg.get("ui_language", "zh"))
         self.log.info(
-            "配置已加载 target=%s max_tokens=%s port=%s model=%s",
+            "配置已加载 target=%s max_tokens=%s port=%s model=%s ui=%s",
             self.cfg.get("target_language"),
             self.cfg.get("max_tokens"),
             self.cfg.get("server_port"),
             self.cfg.get("model_path"),
+            get_language(),
         )
         self.storage = Storage()
         self.server = LlamaServer(self.cfg)
@@ -154,62 +157,94 @@ class App:
     def _build_tray(self):
         self.tray = QSystemTrayIcon(_tray_icon())
         menu = QMenu()
-        # 热键菜单项：保存 (action, cfg键, 标题)，便于改配置后刷新文案
+        # (action, cfg_key, i18n_title_key)
         self._tray_hotkey_items: list[tuple[QAction, str, str]] = []
-        for cfg_key, title, slot in [
-            ("hotkey_screenshot", "截屏翻译", lambda: self._start_select("screenshot")),
-            ("hotkey_word", "划词翻译", self._word_translate),
-            ("hotkey_window", "窗口持续翻译", self._toggle_window_watch),
-            ("hotkey_region_watch", "区域实时翻译", self._toggle_region_watch),
-            ("hotkey_silent_ocr", "截图取字", lambda: self._start_select("silent_ocr")),
+        for cfg_key, title_key, slot in [
+            ("hotkey_screenshot", "hk_shot", lambda: self._start_select("screenshot")),
+            ("hotkey_word", "hk_word", self._word_translate),
+            ("hotkey_window", "hk_win_full", self._toggle_window_watch),
+            ("hotkey_region_watch", "hk_region_full", self._toggle_region_watch),
+            ("hotkey_silent_ocr", "hk_ocr", lambda: self._start_select("silent_ocr")),
         ]:
-            act = QAction(self._tray_hotkey_label(cfg_key, title), menu)
+            act = QAction(menu)
             act.triggered.connect(slot)
             menu.addAction(act)
-            self._tray_hotkey_items.append((act, cfg_key, title))
+            self._tray_hotkey_items.append((act, cfg_key, title_key))
         menu.addSeparator()
-        for label, win in [
-            ("翻译历史…", self.history_win),
-            ("设置…", self.settings_win),
-        ]:
-            act = QAction(label, menu)
-            act.triggered.connect(lambda _=False, w=win: self._show_window(w))
-            menu.addAction(act)
-        open_log = QAction("打开日志…", menu)
-        open_log.triggered.connect(self._open_log)
-        menu.addAction(open_log)
+        self._act_history = QAction(menu)
+        self._act_history.triggered.connect(
+            lambda: self._show_window(self.history_win)
+        )
+        menu.addAction(self._act_history)
+        self._act_settings = QAction(menu)
+        self._act_settings.triggered.connect(
+            lambda: self._show_window(self.settings_win)
+        )
+        menu.addAction(self._act_settings)
+        self._act_open_log = QAction(menu)
+        self._act_open_log.triggered.connect(self._open_log)
+        menu.addAction(self._act_open_log)
         menu.addSeparator()
-        quit_act = QAction("退出", menu)
-        quit_act.triggered.connect(self._quit)
-        menu.addAction(quit_act)
-        # 每次弹出菜单都按当前 cfg 刷新快捷键显示
+        self._act_quit = QAction(menu)
+        self._act_quit.triggered.connect(self._quit)
+        menu.addAction(self._act_quit)
         menu.aboutToShow.connect(self._refresh_tray_hotkeys)
         self.tray.setContextMenu(menu)
         self._refresh_tray_hotkeys()
         self.tray.show()
 
-    def _tray_hotkey_label(self, cfg_key: str, title: str) -> str:
-        return f"{title}（{_hotkey_text(self.cfg[cfg_key])}）"
+    def _tray_hotkey_label(self, cfg_key: str, title_key: str) -> str:
+        return f"{_t(title_key)}（{_hotkey_text(self.cfg[cfg_key])}）"
 
     def _refresh_tray_hotkeys(self):
-        """用当前配置更新托盘菜单热键文案与提示。"""
-        for act, cfg_key, title in self._tray_hotkey_items:
-            act.setText(self._tray_hotkey_label(cfg_key, title))
+        """用当前配置与界面语言更新托盘菜单。"""
+        for act, cfg_key, title_key in self._tray_hotkey_items:
+            act.setText(self._tray_hotkey_label(cfg_key, title_key))
+        self._act_history.setText(_t("tray_history"))
+        self._act_settings.setText(_t("tray_settings"))
+        self._act_open_log.setText(_t("tray_open_log"))
+        self._act_quit.setText(_t("tray_quit"))
         self.tray.setToolTip(
-            "翻译  "
-            f"截屏 {_hotkey_text(self.cfg['hotkey_screenshot'])} | "
-            f"划词 {_hotkey_text(self.cfg['hotkey_word'])} | "
-            f"窗口 {_hotkey_text(self.cfg['hotkey_window'])} | "
-            f"区域 {_hotkey_text(self.cfg['hotkey_region_watch'])} | "
-            f"取字 {_hotkey_text(self.cfg['hotkey_silent_ocr'])}"
+            _t(
+                "tray_tip",
+                shot=_hotkey_text(self.cfg["hotkey_screenshot"]),
+                word=_hotkey_text(self.cfg["hotkey_word"]),
+                win=_hotkey_text(self.cfg["hotkey_window"]),
+                reg=_hotkey_text(self.cfg["hotkey_region_watch"]),
+                ocr=_hotkey_text(self.cfg["hotkey_silent_ocr"]),
+            )
         )
+
+    def apply_ui_language(self):
+        """设置保存后：刷新托盘与各窗口/浮层文案。"""
+        set_language(self.cfg.get("ui_language", "zh"))
+        self._refresh_tray_hotkeys()
+        try:
+            self.settings_win._lang = get_language()
+            self.settings_win._apply_i18n()
+        except Exception:
+            pass
+        for w in (
+            self.history_win,
+            self.translate_win,
+            self.subtitle,
+            self.annotate_ctrl,
+        ):
+            try:
+                w.apply_ui_language()
+            except Exception:
+                pass
+        try:
+            self.region_frame.update()
+        except Exception:
+            pass
 
     def _ensure_server(self) -> bool:
         """确保翻译服务可用；若启动时预热尚未完成，会等待同一启动过程结束。"""
         if self.server.is_healthy():
             return True
         self.log.info("翻译服务未就绪，开始启动/等待…")
-        self.tray.showMessage("翻译", "正在等待翻译模型就绪…")
+        self.tray.showMessage(_t("app_name"), _t("msg_wait_model"))
         try:
             # 与预热共用锁：不会重复拉起第二个 llama-server
             self.server.start()
@@ -219,7 +254,7 @@ class App:
             self.log.exception("翻译服务启动失败")
             from .ui.topmost import topmost_message
 
-            topmost_message("critical", "翻译服务启动失败", str(e))
+            topmost_message("critical", _t("msg_server_fail"), str(e))
             return False
 
     def _preload_models(self):
@@ -246,13 +281,13 @@ class App:
         def _set(key: str, value: str, err: str | None = None):
             self._preload_status[key] = value
             if value == "fail" and err:
-                name = "翻译模型" if key == "llama" else "OCR"
+                name = _t("msg_name_llama") if key == "llama" else _t("msg_name_ocr")
                 self.log.error("预热失败 %s: %s", key, err)
                 QTimer.singleShot(
                     0,
-                    lambda: self.tray.showMessage(
-                        f"翻译：{name}加载失败",
-                        err[:200],
+                    lambda n=name, e=err: self.tray.showMessage(
+                        _t("msg_preload_fail", name=n),
+                        e[:200],
                         QSystemTrayIcon.MessageIcon.Warning,
                     ),
                 )
@@ -336,7 +371,9 @@ class App:
 
     def _finish_silent_ocr(self, source: str, _translation: str):
         QApplication.clipboard().setText(source)
-        self.tray.showMessage("截图取字", "已复制到剪贴板：\n" + source[:120])
+        self.tray.showMessage(
+            _t("msg_ocr_title"), _t("msg_ocr_copied", text=source[:120])
+        )
 
     # ---------- 划词翻译 ----------
     def _word_translate(self):
@@ -427,7 +464,7 @@ class App:
             pass
 
         if not text:
-            self.tray.showMessage("划词翻译", "未获取到选中文本")
+            self.tray.showMessage(_t("msg_word_title"), _t("msg_word_empty"))
             return
         self.log.info("划词拿到文本 chars=%d", len(text))
         worker = OcrTranslateWorker(
@@ -760,7 +797,7 @@ class App:
             self.subtitle.set_mode("follow")
             self.subtitle.attach_below(rect, outside=True)
             self.subtitle.set_text(
-                "开始监视，等待识别文字…" if announce else "已切换为字幕条…"
+                _t("watch_start") if announce else _t("watch_switched_sub")
             )
 
     def _switch_watch_display(self, annotate: bool):
@@ -879,11 +916,11 @@ class App:
         conflicts = self.hotkeys.start()
         if conflicts:
             self.tray.showMessage(
-                "热键冲突",
+                _t("hk_conflict_title"),
                 "；".join(conflicts)[:200],
                 QSystemTrayIcon.MessageIcon.Warning,
             )
-        self._refresh_tray_hotkeys()
+        self.apply_ui_language()
         self.translate_win.sync_language_from_cfg()
         # 备注译文颜色
         try:
@@ -924,7 +961,9 @@ class App:
     def _show_error(self, msg: str):
         # 完整报错写 app.log，托盘只显示摘要
         self.log.error("任务失败:\n%s", msg)
-        self.tray.showMessage("翻译：出错", msg[:200], QSystemTrayIcon.MessageIcon.Warning)
+        self.tray.showMessage(
+            _t("msg_error"), msg[:200], QSystemTrayIcon.MessageIcon.Warning
+        )
 
     def _open_log(self):
         """用系统默认方式打开日志文件。"""
@@ -943,8 +982,8 @@ class App:
 
             topmost_message(
                 "information",
-                "日志",
-                f"日志路径：\n{LOG_PATH}\n\n打开失败：{e}",
+                _t("log_title"),
+                _t("msg_log_open_fail", path=str(LOG_PATH), e=e),
             )
 
     def _quit(self):
@@ -979,10 +1018,16 @@ def _acquire_single_instance(qapp: QApplication) -> QSharedMemory | None:
     if not mem.create(1):
         from .ui.topmost import topmost_message
 
+        from .i18n import set_language, t
+
+        try:
+            set_language(config.load().get("ui_language", "zh"))
+        except Exception:
+            pass
         topmost_message(
             "warning",
-            "翻译",
-            "翻译已在运行中（托盘区）。\n请勿重复启动。",
+            t("app_name"),
+            t("msg_running"),
         )
         return None
     # 保持引用，防止被 GC 释放共享内存

@@ -20,13 +20,17 @@ _HOTKEY_KEYS = (
     "hotkey_region_watch",
 )
 
-_HOTKEY_LABELS = {
-    "hotkey_screenshot": "截屏翻译",
-    "hotkey_word": "划词翻译",
-    "hotkey_window": "窗口持续翻译",
-    "hotkey_silent_ocr": "截图取字",
-    "hotkey_region_watch": "区域实时翻译",
-}
+def _hotkey_label(cfg_key: str) -> str:
+    from .i18n import t
+
+    m = {
+        "hotkey_screenshot": "hk_shot",
+        "hotkey_word": "hk_word",
+        "hotkey_window": "hk_win_full",
+        "hotkey_silent_ocr": "hk_ocr",
+        "hotkey_region_watch": "hk_region_full",
+    }
+    return t(m.get(cfg_key, cfg_key))
 
 # 配置串中的鼠标侧键 token
 _MOUSE_TOKENS = {
@@ -81,9 +85,9 @@ def find_hotkey_conflicts(cfg: dict) -> list[str]:
         val = (cfg.get(key) or "").strip().lower()
         if not val:
             continue
-        label = _HOTKEY_LABELS.get(key, key)
+        label = _hotkey_label(key)
         if val in seen:
-            conflicts.append(f"{seen[val]} 与 {label} 均为 {cfg[key]}")
+            conflicts.append(f"{seen[val]} / {label}: {cfg[key]}")
         else:
             seen[val] = label
     return conflicts

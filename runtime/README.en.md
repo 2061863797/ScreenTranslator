@@ -1,50 +1,59 @@
 # runtime directory
 
-Large files are shipped **with the repo** via **[Git LFS](https://git-lfs.com)** (see root `.gitattributes`).
+Large files (model + llama + OCR) total about **2 GB**. Get them by **any one** of:
 
-| Path | Content | Size | LFS |
-|------|---------|------|-----|
-| `models\HY-MT1.5-1.8B-Q4_K_M.gguf` | Translation model | ~1.1 GB | Yes |
-| `llama\llama-server.exe` + `*.dll` | Local inference | ~0.8 GB | Yes |
-| `paddlex\official_models\...` | OCR weights | ~0.13 GB | Yes |
+| Priority | Method |
+|----------|--------|
+| **Recommended** | Download **`runtime-*.zip`** from this repo’s **[GitHub Releases](../../releases)**, extract into the **project root** (next to `run.py`) so you get this `runtime\` folder |
+| Alternative | Git LFS: `git lfs pull` |
+| Alternative | From repo root: `.\scripts\download_runtime.ps1` or `.\setup.ps1 -DownloadRuntime` |
+| Alternative | Manual downloads below |
 
-**Total ~2 GB.** After clone + LFS pull, paths should be ready. Still run `setup.ps1` for `venv` and `config.json`.
+## Layout
 
-## Verify LFS
+| Path | Content | Size |
+|------|---------|------|
+| `models\HY-MT1.5-1.8B-Q4_K_M.gguf` | Translation model | ~1.1 GB |
+| `llama\llama-server.exe` + `*.dll` | Local inference | ~0.8 GB |
+| `paddlex\official_models\...` | OCR weights | ~0.13 GB |
+
+Still run `setup.ps1` for `venv` and `config.json`. **Source code** zips do **not** include real model blobs.
+
+## Using the Release zip
+
+1. Open the repo → **Releases**  
+2. Download the runtime asset (e.g. `runtime-v1.1.0.zip`)  
+3. Extract into `ScreenTranslator\`  
+
+You should have:
+
+```text
+ScreenTranslator\runtime\models\*.gguf
+ScreenTranslator\runtime\llama\llama-server.exe
+ScreenTranslator\runtime\paddlex\...
+```
+
+Avoid double nesting (`runtime\runtime\`).
+
+## Verify
 
 ```powershell
-# From repo root (ScreenTranslator\), not inside runtime\
-git lfs install
-git lfs pull
+# repo root
 Get-Item .\runtime\models\*.gguf | Format-Table Name, Length
-# Length should be ~1e9, not ~130 bytes
-```
-
-Optional GUI for llama-server only: root `启动llama.bat` (see `LLAMA启动器说明.md`, Chinese).
-
-GitHub **Source zip** usually has **pointers only**, not real models.
-
-## Manual download
-
-From repo root:
-
-```powershell
-.\scripts\download_runtime.ps1
-# or
-.\setup.ps1 -DownloadRuntime
-```
-
-| Asset | Source |
-|-------|--------|
-| Model | https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF |
-| llama | https://github.com/ggml-org/llama.cpp/releases (Windows CUDA 12/13 or CPU) |
-
-Flatten `llama-server.exe` and all DLLs into `runtime\llama\`. Do not mix CUDA 12 and 13 DLLs.
-
-## Check
-
-```powershell
 .\setup.ps1 -Check
 ```
 
-Chinese: [README.md](./README.md) in this folder.
+GGUF should be ~1 GB, not ~100 bytes (LFS pointer).
+
+Optional llama GUI: root `启动llama.bat` (see `LLAMA启动器说明.md`).
+
+## Manual sources
+
+| Asset | URL |
+|-------|-----|
+| Model | https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF |
+| llama | https://github.com/ggml-org/llama.cpp/releases |
+
+Flatten `llama-server.exe` + DLLs into `runtime\llama\`. Do not mix CUDA 12 and 13.
+
+Chinese: [README.md](./README.md).

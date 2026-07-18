@@ -3,11 +3,7 @@ venv/
 .venv/
 config.json
 
-# —— 运行时大文件（模型 / llama / OCR，勿进 Git）——
-runtime/models/
-runtime/llama/
-runtime/paddlex/
-# 保留 runtime/README.md
+# runtime/models、runtime/llama、runtime/paddlex 一并进库（Git LFS，见 .gitattributes）
 
 # —— 用户数据与日志 ——
 *.db
@@ -21,7 +17,9 @@ error.log
 build/
 dist/
 *.spec
+# 根目录启动器可生成；runtime/llama 内的 server 等 exe 要进 LFS
 *.exe
+!runtime/llama/*.exe
 翻译.exe
 
 # —— Python / 工具缓存 ——

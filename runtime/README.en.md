@@ -1,6 +1,6 @@
 # runtime directory
 
-Model + llama + OCR ≈ **2 GB**. **Not stored in Git.** Get them from **GitHub Releases** (recommended), scripts, or official sites.
+Model + llama + OCR ≈ **2 GB**. Get them from **GitHub Releases** (recommended), scripts, or official sites. The source code package does not include these files.
 
 ## Get runtime
 

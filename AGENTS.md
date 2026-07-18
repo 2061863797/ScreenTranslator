@@ -8,15 +8,15 @@
 - **协议**：源码 **Apache-2.0**（`LICENSE`）；第三方/模型见 `NOTICE`。
 - **栈**：Python 3.11～3.13（推荐 3.12）+ PySide6；OCR = PaddleOCR；翻译 = 本机 `llama-server` + HY-MT1.5。
 - **入口**：`run.py` → `app.main.main`；启动器 `launcher.py` / `翻译.exe`（`build.ps1`）。
-- **路径**：`app/paths.py`；资源在 `runtime/`（**不进 Git**，用 **Release 压缩包** 分发）。
-- **配置**：`config.json`（gitignore）+ `config.example.json`；缺省见 `DEFAULTS`。
-- **安装**：`setup.ps1` / `scripts/download_runtime.ps1`。说明：中文 **`README.md`**，英文 **`README.en.md`** / **`SETTINGS.en.md`**。UI 语言：`ui_language` = `zh`|`en`。
-- **CodeGraph**：`projectPath` = 本仓库根；排除 `venv/`、`runtime` 大文件、`*.db`。
+- **路径**：`app/paths.py`；资源在 `runtime/`（发布用 **Release 压缩包**）。
+- **配置**：`config.json` + `config.example.json`；缺省见 `DEFAULTS`。
+- **安装**：`setup.ps1` / `scripts/download_runtime.ps1`。用户说明以 **`README.md`** / **`README.en.md`** 为准。
+- **CodeGraph**：`projectPath` = 本仓库根；排除 `venv/`、大模型目录、`*.db`。
 
 ## 易混点
 
 - Python 版本 ≠ CUDA 12/13；Paddle 在 **3.14** 上通常装不上。
-- **不要**把 models/llama/paddlex 再提交进 Git；大文件只走 Release。
+- 用户向文档避免「进不进 Git」表述；写「源码包 / Release 附件 / 本机生成」即可。
 
 ## 改动约定
 

@@ -1,6 +1,6 @@
 # runtime 资源目录
 
-模型 / llama / OCR 约 **2GB**，**不进 Git 仓库**。请从本仓库 **GitHub Releases** 下载压缩包，或用脚本/官网补齐。
+模型 / llama / OCR 约 **2GB**。请从本仓库 **GitHub Releases** 下载压缩包，或用脚本/官网补齐（源码包本身不含这些文件）。
 
 ## 获取方式（任选）
 

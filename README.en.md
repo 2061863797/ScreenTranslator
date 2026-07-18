@@ -1,137 +1,137 @@
 # ScreenTranslator
 
-Windows **offline** tray app: screenshot translation, selection (word) translation, window / region live translation.
+Windows **offline** tray app: screenshot translation, selection translate, window / region live translation.
 
-**License:** [Apache License 2.0](./LICENSE) (source code; third-party/models: [NOTICE](./NOTICE))
+**License:** [Apache License 2.0](./LICENSE) (source; third-party/models: [NOTICE](./NOTICE))
+
+**中文说明：** [README.md](./README.md) · Settings: [SETTINGS.en.md](./SETTINGS.en.md)
+
+**Optional llama-server GUI:** root `启动llama.bat` (see [LLAMA启动器说明.md](./LLAMA启动器说明.md)). Daily use: `run.py` / `翻译.exe`.
 
 | Feature | Stack |
 |---------|--------|
 | UI | Python + PySide6 |
-| OCR | PaddleOCR (PP-OCRv6 by default) |
-| Translation | Local `llama-server` + Tencent **HY-MT1.5** GGUF |
-
-**中文说明：** [README.md](./README.md) · Settings: [SETTINGS.en.md](./SETTINGS.en.md)
-
-**Optional llama-server GUI (tinker only):** root `启动llama.bat` → `runtime\llama\llama启动.exe` (doc: [LLAMA启动器说明.md](./LLAMA启动器说明.md), Chinese). For daily translation use `run.py` / `翻译.exe`.
-
----
-
-## What’s in this repo
-
-| Content | How to get it |
-|---------|----------------|
-| **Source code** | `git clone` / Source zip |
-| **runtime (~2 GB)** model + llama + OCR | **Recommended: GitHub Release asset** `runtime-*.zip` |
-
-| Path | Content | Size |
-|------|---------|------|
-| `runtime/models/` | `HY-MT1.5-1.8B-Q4_K_M.gguf` | ~1.1 GB |
-| `runtime/llama/` | `llama-server.exe` + DLLs | ~0.8 GB |
-| `runtime/paddlex/` | OCR weights | ~0.13 GB |
-
-### Get runtime (pick one)
-
-| Method | Notes |
-|--------|--------|
-| **① Release zip (recommended)** | GitHub repo page → **Releases** → download `runtime-*.zip` → **extract into project root** → `runtime\models`, `runtime\llama`, `runtime\paddlex` |
-| ② Script | `.\scripts\download_runtime.ps1` or `.\setup.ps1 -DownloadRuntime` |
-| ③ Manual | See [runtime/README.en.md](./runtime/README.en.md) |
-
-**Large files are not in the Git repo** — only via Release (or scripts/manual).  
-**Not in the zip / not in Git:** `venv/`, `config.json`, history DB, logs — create with `setup.ps1` on each PC.
+| OCR | PaddleOCR (PP-OCRv6) |
+| Translation | Local `llama-server` + **HY-MT1.5** GGUF |
 
 ---
 
 ## 1. Requirements
 
-### System
+### System & hardware
 
 | Need | Notes |
 |------|--------|
-| **Windows 10/11 64-bit** | Only target platform |
+| **Windows 10/11 64-bit** | Only supported OS |
 | Disk | **≥ 5 GB** free recommended |
-| Admin | Usually **not** required |
+| **NVIDIA GPU** (optional) | Faster; CPU works but slower |
+| RAM | **16 GB+** recommended |
+| Admin | Usually not required |
 
 ### Python (required)
 
 | Need | Notes |
 |------|--------|
 | **Python 3.11–3.13** | **3.12 recommended** |
-| **Not 3.14** | Paddle Windows wheels often missing → OCR install fails |
-
-[PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) supports a range of Python versions; the hard limit is **Paddle wheels**, not “3.12 only”.
-
-**Python ≠ CUDA:** Python runs the app/OCR; CUDA 12/13 is only for GPU `llama-server` builds.
+| **Not 3.14** | Paddle wheels often missing → OCR will not install |
 
 ```powershell
 winget install Python.Python.3.12
 py -0p
 ```
 
-### Hardware
+Python ≠ CUDA: Python runs the app/OCR; CUDA 12/13 only affects GPU llama builds.
 
-| Setup | Works? | Notes |
-|-------|--------|--------|
-| NVIDIA GPU + recent driver | Best | GPU OCR + translation |
-| iGPU / no discrete GPU | Yes | CPU Paddle + `n_gpu_layers: 0` (slower) |
-| RAM | 16 GB+ recommended | |
+### Files you need
 
-### Runtime files
+```text
+ScreenTranslator/
+  app/  run.py  setup.ps1  …
+  runtime/
+    models/…gguf
+    llama/llama-server.exe + *.dll
+    paddlex/…
+  venv/           ← created by setup
+  config.json     ← created by setup
+```
 
-Prefer the **Release `runtime-*.zip`**. Still need `venv` + `config.json` via `setup.ps1`.
+| Part | Where from |
+|------|------------|
+| App source | **Source / Code** ZIP or `git clone` |
+| **runtime** (~2 GB) | **Releases** asset **`runtime-*.zip`** (recommended), or download scripts / manual (see [runtime/README.en.md](./runtime/README.en.md)) |
+
+### If you only download ZIPs
+
+| Download | Contains | You still need |
+|----------|----------|----------------|
+| **Source code ZIP** | App + docs, **no** models | **Release `runtime-*.zip`** extracted to the same project root; Python 3.12; run `setup.ps1` |
+| **runtime-*.zip** | Models + llama + OCR | Extract into the **source** folder root (not a complete app by itself) |
+| Full bundle (if provided) | See that Release’s notes | Often still need local `setup.ps1` for `venv` |
+
+**Minimum for “ZIP only” install:**
+
+1. Windows 10/11 64-bit  
+2. **Python 3.12** (or 3.11 / 3.13) installed  
+3. Source folder + **runtime** extracted correctly  
+4. Network once for `pip` / Paddle  
+5. ~**5 GB** free disk  
+
+After extract you should have `runtime\models\*.gguf` and `runtime\llama\llama-server.exe` under the project root. Avoid `runtime\runtime\...`.
 
 ### Network
 
 | Step | Online? |
 |------|---------|
-| `git clone` source | Yes |
-| Download Release runtime zip (~2 GB) | Yes (recommended) |
-| `pip` / Paddle | Yes |
+| Download source / runtime zip | Yes |
+| First `setup.ps1` | Yes |
 | Daily translation | **No** (localhost) |
 
 ---
 
-## 2. Setup on a new PC
+## 2. Install & run
+
+All paths are relative to the **project root** (folder that contains `run.py`).
+
+### 1. Get the app
+
+- GitHub: **Code → Download ZIP**, or  
+- `git clone <repo-url>`
+
+### 2. Get runtime (recommended: Release)
+
+1. Open **Releases** on this repo  
+2. Download **`runtime-*.zip`**  
+3. Extract into the **project root** (same level as `run.py`)
+
+Alternative: `.\scripts\download_runtime.ps1` or `.\setup.ps1 -DownloadRuntime`.
+
+### 3. Install environment
 
 ```powershell
-git clone <repo-url> ScreenTranslator
-cd ScreenTranslator
-# Download runtime-*.zip from Releases → extract into this folder
-# (you should see .\runtime\models\*.gguf)
+# Set-ExecutionPolicy -Scope CurrentUser RemoteSigned   # if needed
 
-# Allow scripts if needed:
-# Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-
-.\setup.ps1              # NVIDIA
+.\setup.ps1              # with NVIDIA
 .\setup.ps1 -CpuOnly     # no discrete GPU
-# Only if runtime still missing:
-.\setup.ps1 -DownloadRuntime
-
 .\setup.ps1 -Check
+```
+
+### 4. Start
+
+```powershell
 venv\Scripts\pythonw.exe run.py
 ```
 
-Optional launcher: `.\build.ps1` → `翻译.exe`.
+Optional: `.\build.ps1` → `翻译.exe`.
 
-### Manual runtime (no Release zip)
+### 5. Optional config
 
-1. HuggingFace: **`HY-MT1.5-1.8B-Q4_K_M.gguf`** → `runtime\models\`
-2. [llama.cpp Releases](https://github.com/ggml-org/llama.cpp/releases) → `runtime\llama\`
-3. `.\setup.ps1` / first OCR for paddlex  
-Details: [runtime/README.en.md](./runtime/README.en.md)
+| Key | Notes |
+|-----|--------|
+| `n_gpu_layers` | Use `0` without NVIDIA |
+| `ui_language` | `zh` / `en` |
+| Hotkeys | Keyboard or `mouse.x1` / `mouse.x2` |
 
-### Config tips (`config.json`)
-
-| Key | When |
-|-----|------|
-| `n_gpu_layers` | Set `0` without NVIDIA / OOM |
-| `threads` | CPU cores (`setup` estimates) |
-| `ui_language` | `zh` / `en` — **Settings UI language** |
-| Hotkeys | Settings → Hotkeys; mouse side buttons: `mouse.x1` / `mouse.x2` |
-
-Do **not** copy someone else’s `venv` across machines; re-run `setup.ps1`.
-
-English guide to each setting: **[SETTINGS.en.md](./SETTINGS.en.md)**.
+See [SETTINGS.en.md](./SETTINGS.en.md).
 
 ---
 
@@ -143,10 +143,9 @@ English guide to each setting: **[SETTINGS.en.md](./SETTINGS.en.md)**.
 | Selection translate | Alt+W |
 | Window live translate | Alt+E |
 | Region live translate | Alt+R |
-| Screenshot OCR only | Alt+S |
+| Screenshot OCR | Alt+S |
 
-Tray: history, settings, log, quit.  
-Only **one** continuous session at a time; switch **Subtitle ↔ Annotation** from the floating bar while running.
+One continuous session at a time; switch **Subtitle ↔ Annotation** on the floating bar while running.
 
 ---
 
@@ -154,13 +153,13 @@ Only **one** continuous session at a time; switch **Subtitle ↔ Annotation** fr
 
 | Issue | Fix |
 |-------|-----|
-| Missing / tiny model file | Download **Release `runtime-*.zip`** and extract to project root |
-| Missing runtime | Use Release assets, not the “Source code” zip |
-| No paddlepaddle wheel | Use Python **3.12**, not 3.14 |
-| llama fails on GPU | `n_gpu_layers: 0` or CPU llama build |
-| Hotkeys dead | Rebind in Settings; try `mouse.x1` |
+| No model / server fails | Extract **Release runtime zip** to project root |
+| Source only | Source zip has no models — also get `runtime-*.zip` |
+| No paddlepaddle wheel | Use **Python 3.12**, not 3.14 |
+| GPU / llama fails | `n_gpu_layers: 0` |
+| Hotkeys dead | Rebind in Settings |
 
-Log: `app.log` (tray → Open log).
+Log: `app.log`.
 
 ---
 
@@ -171,8 +170,6 @@ Log: `app.log` (tray → Open log).
 .\setup.ps1 -DownloadRuntime
 .\setup.ps1 -CpuOnly
 .\setup.ps1 -Check
-.\scripts\download_runtime.ps1
-.\build.ps1
 venv\Scripts\pythonw.exe run.py
 ```
 
@@ -182,12 +179,11 @@ Version: `app/__init__.py`.
 
 ## License
 
-- **This repository’s source code:** [Apache License 2.0](./LICENSE)  
-- **Third-party libraries and model weights:** see [NOTICE](./NOTICE). HY-MT and similar weights follow their **own** model licenses, not Apache-2.0 of this repo.
+- **Source code:** [Apache License 2.0](./LICENSE)  
+- **Third-party & models:** [NOTICE](./NOTICE). Model weights use their own licenses.
 
 ---
 
 ## Disclaimer
 
-The **download and setup instructions** in this document were **generated with AI** and **may be wrong or outdated**.  
-Always verify against the actual repo, Release asset names, and your machine. You are responsible for checking steps before running them.
+Download/setup docs may be **AI-generated** and **wrong or outdated**. Verify Release names and your environment yourself before running commands.

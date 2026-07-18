@@ -57,3 +57,9 @@ Get-Item .\runtime\models\*.gguf | Format-Table Name, Length
 | llama | https://github.com/ggml-org/llama.cpp/releases（Windows CUDA 12/13 或 CPU） |
 
 llama：exe 与 dll **平铺**到 `runtime\llama\`；CUDA 12/13 勿混用。
+
+---
+
+## 免责说明
+
+本页**下载与放置教程由 AI 生成**，可能有误或过时。请对照 Release 实际文件名与本机路径**自行检查**后再操作。

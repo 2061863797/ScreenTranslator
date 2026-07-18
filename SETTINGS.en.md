@@ -78,3 +78,9 @@ Live `app.log` tail. **Clear view** only clears the panel; **Open log file** ope
 - [README.en.md](./README.en.md) — install & run  
 - [runtime/README.en.md](./runtime/README.en.md) — models / llama / OCR  
 - [README.md](./README.md) — 中文说明  
+
+---
+
+## Disclaimer
+
+Documentation may be **AI-generated** and **incorrect**. Verify settings keys and behavior yourself.

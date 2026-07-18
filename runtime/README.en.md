@@ -58,3 +58,9 @@ Optional: root `启动llama.bat` (see `LLAMA启动器说明.md`).
 Flatten server + DLLs into `runtime\llama\`. Do not mix CUDA 12 and 13.
 
 Chinese: [README.md](./README.md).
+
+---
+
+## Disclaimer
+
+Download/setup notes here were **AI-generated** and **may be wrong**. Verify Release assets and paths yourself.

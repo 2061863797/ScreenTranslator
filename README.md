@@ -300,3 +300,10 @@ venv\Scripts\pythonw.exe run.py  # 启动翻译软件
 | [LLAMA启动器说明.md](./LLAMA启动器说明.md) | 独立 llama 图形启动器 |
 | [runtime/README.md](./runtime/README.md) | runtime 资源（中文） |
 | [runtime/README.en.md](./runtime/README.en.md) | runtime (EN) |
+
+---
+
+## 免责说明
+
+本说明中的**下载、安装与配置教程由 AI 生成**，步骤、路径、版本号等**可能有误或过时**。  
+请以实际仓库文件、Release 附件名与本机环境为准，**自行核对后再操作**；因照做教程导致的问题需自行排查。

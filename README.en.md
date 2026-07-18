@@ -175,3 +175,10 @@ venv\Scripts\pythonw.exe run.py
 ```
 
 Version: `app/__init__.py`.
+
+---
+
+## Disclaimer
+
+The **download and setup instructions** in this document were **generated with AI** and **may be wrong or outdated**.  
+Always verify against the actual repo, Release asset names, and your machine. You are responsible for checking steps before running them.

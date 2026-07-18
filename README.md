@@ -2,6 +2,8 @@
 
 Windows 本地**离线**托盘工具：截屏翻译、划词翻译、窗口/区域实时翻译。
 
+**License:** [Apache License 2.0](./LICENSE)（源码；模型等第三方见 [NOTICE](./NOTICE)）
+
 **English:** [README.en.md](./README.en.md) · [Settings (EN)](./SETTINGS.en.md) · [runtime/README.en.md](./runtime/README.en.md)
 
 **单独玩 llama-server 图形启动器：** 根目录双击 [`启动llama.bat`](./启动llama.bat)（说明见 [LLAMA启动器说明.md](./LLAMA启动器说明.md)）。日常翻译请用 `翻译.exe` / `run.py`。
@@ -300,6 +302,13 @@ venv\Scripts\pythonw.exe run.py  # 启动翻译软件
 | [LLAMA启动器说明.md](./LLAMA启动器说明.md) | 独立 llama 图形启动器 |
 | [runtime/README.md](./runtime/README.md) | runtime 资源（中文） |
 | [runtime/README.en.md](./runtime/README.en.md) | runtime (EN) |
+
+---
+
+## 开源协议
+
+- **本仓库源代码**： [Apache License 2.0](./LICENSE)  
+- **第三方与模型**：见 [NOTICE](./NOTICE)。Release 中的 HY-MT 等权重以其官方模型许可为准，**不等于**本仓库 Apache-2.0。
 
 ---
 

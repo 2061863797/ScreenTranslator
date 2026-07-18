@@ -5,6 +5,7 @@
 ## 项目画像
 
 - **定位**：Windows 本地离线截屏 / 划词 / 窗口·区域实时翻译托盘工具。
+- **协议**：源码 **Apache-2.0**（`LICENSE`）；第三方/模型见 `NOTICE`。
 - **栈**：Python 3.11～3.13（推荐 3.12）+ PySide6；OCR = PaddleOCR；翻译 = 本机 `llama-server` + HY-MT1.5。
 - **入口**：`run.py` → `app.main.main`；启动器 `launcher.py` / `翻译.exe`（`build.ps1`）。
 - **路径**：`app/paths.py`；资源在 `runtime/`（**不进 Git**，用 **Release 压缩包** 分发）。

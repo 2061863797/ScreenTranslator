@@ -2,6 +2,8 @@
 
 Windows **offline** tray app: screenshot translation, selection (word) translation, window / region live translation.
 
+**License:** [Apache License 2.0](./LICENSE) (source code; third-party/models: [NOTICE](./NOTICE))
+
 | Feature | Stack |
 |---------|--------|
 | UI | Python + PySide6 |
@@ -175,6 +177,13 @@ venv\Scripts\pythonw.exe run.py
 ```
 
 Version: `app/__init__.py`.
+
+---
+
+## License
+
+- **This repository’s source code:** [Apache License 2.0](./LICENSE)  
+- **Third-party libraries and model weights:** see [NOTICE](./NOTICE). HY-MT and similar weights follow their **own** model licenses, not Apache-2.0 of this repo.
 
 ---
 

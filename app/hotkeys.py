@@ -110,10 +110,13 @@ class HotkeyManager(QObject):
         # 当前按下的修饰键（供侧键组合用）
         self._mods_down: set[str] = set()
         self._mod_listener: keyboard.Listener | None = None
+        # 设置页录入热键时暂停，避免抢键
+        self._paused = False
 
     def start(self) -> list[str]:
         """注册热键。返回冲突列表。"""
-        self.stop()
+        self._stop_listeners()
+        self._paused = False
         conflicts = find_hotkey_conflicts(self._cfg)
         mapping = {
             self._cfg["hotkey_screenshot"]: self.screenshot_triggered.emit,
@@ -161,7 +164,25 @@ class HotkeyManager(QObject):
 
         return conflicts
 
+    def pause(self) -> None:
+        """设置页录入热键时调用：停全局监听，不改变配置。"""
+        if self._paused:
+            return
+        self._paused = True
+        self._stop_listeners()
+
+    def resume(self) -> None:
+        """录入结束：若处于 pause，按当前配置重新注册。"""
+        if not self._paused:
+            return
+        self._paused = False
+        self.start()
+
     def stop(self):
+        self._paused = False
+        self._stop_listeners()
+
+    def _stop_listeners(self):
         if self._kb_listener:
             try:
                 self._kb_listener.stop()

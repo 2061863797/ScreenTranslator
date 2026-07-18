@@ -18,13 +18,30 @@ from .paths import resolve_path
 _log = get_logger("llama")
 
 
+# 仅允许本机回环，防止误配 0.0.0.0 把翻译服务暴露到局域网
+_LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def sanitize_server_host(host: str | None) -> str:
+    """配置/启动时强制本机 host。"""
+    h = (host or "127.0.0.1").strip().lower()
+    if h not in _LOCAL_HOSTS:
+        _log.warning("server_host=%r 非本机，已强制 127.0.0.1", host)
+        return "127.0.0.1"
+    # 统一成 IPv4 回环，避免 [::1] 与 127.0.0.1 混用
+    if h in ("localhost", "::1"):
+        return "127.0.0.1"
+    return h
+
+
 class LlamaServer:
     def __init__(self, cfg: dict):
         self._cfg = cfg
         # 支持 config 里写 runtime/llama 这类相对项目根的路径
         self.llama_dir = resolve_path(cfg["llama_dir"])
         self.model_path = resolve_path(cfg["model_path"])
-        self.host = cfg["server_host"]
+        self.host = sanitize_server_host(cfg.get("server_host"))
+        cfg["server_host"] = self.host
         self.port = int(cfg["server_port"])
         self._proc: subprocess.Popen | None = None
         # 启动时预热与首次翻译可能并发调用 start，串行化避免重复拉起进程

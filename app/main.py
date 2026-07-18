@@ -3,7 +3,7 @@
 
 import sys
 
-from PySide6.QtCore import QSharedMemory, QTimer
+from PySide6.QtCore import QEventLoop, QSharedMemory, QTimer
 from PySide6.QtGui import QAction, QColor, QCursor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -115,8 +115,15 @@ class App:
         # 当前会话是否备注模式（与 cfg 同步，便于运行中切换）
         self._watch_annotate: bool | None = None
 
+        # 热键先于设置窗：录入热键时需 pause 全局监听
+        self.hotkeys = HotkeyManager(self.cfg)
+
         # 功能窗口（按需显示）
-        self.settings_win = SettingsWindow(self.cfg, on_saved=self._on_settings_saved)
+        self.settings_win = SettingsWindow(
+            self.cfg,
+            on_saved=self._on_settings_saved,
+            hotkey_manager=self.hotkeys,
+        )
         self.translate_win = InputTranslateWindow(
             self.translator, self.cfg, ensure_server=self._ensure_server
         )
@@ -139,8 +146,7 @@ class App:
         self.selector.region_selected.connect(self._on_region)
         self.selector.cancelled.connect(self._on_region_cancelled)
 
-        # 热键
-        self.hotkeys = HotkeyManager(self.cfg)
+        # 热键信号（实例在设置窗之前已创建）
         self.hotkeys.screenshot_triggered.connect(lambda: self._start_select("screenshot"))
         self.hotkeys.word_triggered.connect(self._word_translate)
         self.hotkeys.window_triggered.connect(self._toggle_window_watch)
@@ -229,15 +235,12 @@ class App:
             self.translate_win,
             self.subtitle,
             self.annotate_ctrl,
+            self.region_frame,
         ):
             try:
                 w.apply_ui_language()
             except Exception:
                 pass
-        try:
-            self.region_frame.update()
-        except Exception:
-            pass
 
     def _ensure_server(self) -> bool:
         """确保翻译服务可用；若启动时预热尚未完成，会等待同一启动过程结束。"""
@@ -588,7 +591,7 @@ class App:
                 pass
 
     def _join_watcher(self, w, *, label: str = "监视线程") -> None:
-        """请求停止并短暂等待；等待期间 processEvents 用标志防重入。"""
+        """请求停止并短暂等待；尽量少进事件循环，避免停线程时重入开新会话。"""
         if w is None:
             return
         self._disconnect_watcher(w)
@@ -596,11 +599,18 @@ class App:
         was = self._stopping_watch
         self._stopping_watch = True
         try:
-            for _ in range(40):
+            # 先纯等待，不处理用户输入事件
+            if w.wait(1500):
+                return
+            # 仍在跑：少量 processEvents（排除用户输入）保 UI 不假死
+            for _ in range(10):
                 if not w.isRunning():
                     break
-                self.qapp.processEvents()
-                w.wait(50)
+                self.qapp.processEvents(
+                    QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents
+                )
+                if w.wait(100):
+                    break
             if w.isRunning():
                 self.log.warning("%s仍在运行（可能卡在翻译请求），UI 已关闭", label)
         finally:
@@ -1013,23 +1023,31 @@ class App:
 
 
 def _acquire_single_instance(qapp: QApplication) -> QSharedMemory | None:
-    """确保仅一个实例；已有实例时返回 None。"""
+    """确保仅一个实例；已有实例时返回 None。
+
+    崩溃残留的共享内存：attach+detach 后再 create，避免误拦二次启动。
+    """
     mem = QSharedMemory(_INSTANCE_KEY)
     if not mem.create(1):
-        from .ui.topmost import topmost_message
+        # 尝试清理崩溃残留（活实例仍会占用，create 会再次失败）
+        stale = QSharedMemory(_INSTANCE_KEY)
+        if stale.attach():
+            stale.detach()
+        if not mem.create(1):
+            from .ui.topmost import topmost_message
 
-        from .i18n import set_language, t
+            from .i18n import set_language, t
 
-        try:
-            set_language(config.load().get("ui_language", "zh"))
-        except Exception:
-            pass
-        topmost_message(
-            "warning",
-            t("app_name"),
-            t("msg_running"),
-        )
-        return None
+            try:
+                set_language(config.load().get("ui_language", "zh"))
+            except Exception:
+                pass
+            topmost_message(
+                "warning",
+                t("app_name"),
+                t("msg_running"),
+            )
+            return None
     # 保持引用，防止被 GC 释放共享内存
     qapp._screen_translator_instance = mem  # type: ignore[attr-defined]
     return mem

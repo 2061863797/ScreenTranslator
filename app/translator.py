@@ -105,8 +105,8 @@ class Translator:
         """粗估 token 数（中英混排偏保守，略高估防 400）。"""
         if not s:
             return 0
-        # 约 1.5 字/ token 不够保守；用 1 字≈1 token 再加 10%
-        return max(1, int(len(s) * 1.1) + 8)
+        # 中文常接近 1 token/字，英文更碎；用 1.3 倍 + 余量，宁可多截少 400
+        return max(1, int(len(s) * 1.3) + 16)
 
     def _clip_text_for_ctx(self, text: str, template_overhead: int) -> str:
         """按 n_ctx 截断原文，为提示模板与生成留空。
@@ -114,11 +114,11 @@ class Translator:
         llama-server 在 prompt+生成 超过 n_ctx 时直接 400 exceed_context_size_error。
         """
         ctx, gen_cap = self._ctx_budget()
-        # 提示固定开销 + 生成预留 + 安全余量
-        reserve = template_overhead + gen_cap + 64
+        # 提示固定开销 + 生成预留 + 安全余量（偏大，配合 _est_tokens 高估）
+        reserve = template_overhead + gen_cap + 128
         budget_tok = max(128, ctx - reserve)
-        # 字符预算：略小于 token 预算（中文偏 1:1）
-        budget_chars = max(200, budget_tok)
+        # 字符预算：再按估算系数收紧
+        budget_chars = max(200, int(budget_tok / 1.3))
         if len(text) <= budget_chars:
             return text
         clipped = text[:budget_chars].rstrip()
@@ -175,38 +175,59 @@ class Translator:
         return max(64, est)
 
     def _chat(self, prompt: str, max_tokens: int) -> str:
-        """发 chat/completions；失败时带上服务端错误正文。"""
+        """发 chat/completions；失败时带上服务端错误正文。
+
+        遇 400 上下文超限时，将 prompt 减半并收紧 max_tokens 后重试一次。
+        """
         # 二次保险：若仍可能超上下文，再砍生成长度
         ctx, _ = self._ctx_budget()
         used = self._est_tokens(prompt)
-        if used + max_tokens + 8 > ctx:
-            max_tokens = max(64, ctx - used - 8)
+        if used + max_tokens + 16 > ctx:
+            max_tokens = max(64, ctx - used - 16)
         if used + 64 > ctx:
             # 提示本身过大：硬截断 prompt 尾部
-            keep = max(200, int((ctx - 128) / 1.1))
+            keep = max(200, int((ctx - 160) / 1.3))
             prompt = prompt[:keep] + "\n…"
             max_tokens = max(64, min(max_tokens, 256))
             _log.warning("提示过长再次截断 prompt_chars≈%d", len(prompt))
 
-        resp = self._session.post(
-            f"{self.base_url}/v1/chat/completions",
-            json={
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.1,
-                "top_p": 0.8,
-                "max_tokens": int(max_tokens),
-            },
-            timeout=self.timeout,
-        )
-        if not resp.ok:
+        last_err: Exception | None = None
+        for attempt in range(2):
+            resp = self._session.post(
+                f"{self.base_url}/v1/chat/completions",
+                json={
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,
+                    "top_p": 0.8,
+                    "max_tokens": int(max_tokens),
+                },
+                timeout=self.timeout,
+            )
+            if resp.ok:
+                data = resp.json()
+                return data["choices"][0]["message"]["content"].strip()
+
             detail = (resp.text or "").strip().replace("\n", " ")
             if len(detail) > 400:
                 detail = detail[:400] + "…"
-            raise RuntimeError(
+            last_err = RuntimeError(
                 f"llama-server HTTP {resp.status_code}: {detail or resp.reason}"
             )
-        data = resp.json()
-        return data["choices"][0]["message"]["content"].strip()
+            low = detail.lower()
+            is_ctx = resp.status_code == 400 and (
+                "context" in low or "exceed" in low or "n_ctx" in low
+            )
+            if is_ctx and attempt == 0:
+                keep = max(200, len(prompt) // 2)
+                prompt = prompt[:keep].rstrip() + "\n…"
+                max_tokens = max(64, min(max_tokens // 2, 256))
+                _log.warning(
+                    "400 上下文超限，减半重试 prompt≈%d max_tokens=%d",
+                    len(prompt), max_tokens,
+                )
+                continue
+            raise last_err
+        raise last_err  # pragma: no cover
 
     def _translate_prompt(self, prompt: str, target_language: str, preview: str) -> str:
         prompt = self._sanitize(prompt)

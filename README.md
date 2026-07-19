@@ -27,24 +27,23 @@ GitHub → **Code → Download ZIP** 并解压，或 `git clone` 本仓库。
 
 ### 2. 下载翻译模型与 llama（约 2GB）
 
-OCR 模型（`runtime\paddlex\`）已随源码提供。  
-翻译模型与 llama-server 仍需单独下载：
+| 资源 | 从哪来 |
+|------|--------|
+| OCR（`runtime\paddlex\`） | **已随源码**，不用另下 |
+| 配置 `config.json` | 本机生成：`.\setup.ps1` 或复制 `config.example.json` |
+| 翻译模型、llama-server | GitHub **Releases** 两个压缩包 |
 
-GitHub → **Releases** → 下载 **`runtime-*.zip`** → **解压到源码根目录**（与 `run.py` 同级）。
-
-解压后应有：
+Releases 下载并解压到源码根（与 `run.py` 同级），使目录成为：
 
 ```text
 ScreenTranslator\
   run.py
-  runtime\models\*.gguf
-  runtime\llama\llama-server.exe
-  runtime\paddlex\official_models\...
+  runtime\models\*.gguf          ← models 压缩包
+  runtime\llama\llama-server.exe ← llama 压缩包
+  runtime\paddlex\official_models\...  ← 源码已带
 ```
 
-> 只下「Source code」zip **没有翻译模型 / llama**。必须再下 Releases 里的 runtime 包（或按 [runtime/README.md](./runtime/README.md) 手动准备）。
-
-没有 Release 时：见 [runtime/README.md](./runtime/README.md)，或项目根执行 `.\setup.ps1 -DownloadRuntime`。
+> 只下「Source code」**没有**翻译模型 / llama。没有 Release 时见 [runtime/README.md](./runtime/README.md)，或 `.\setup.ps1 -DownloadRuntime`。
 
 ### 3. 安装环境
 
@@ -87,7 +86,7 @@ venv\Scripts\pythonw.exe run.py
 
 | 现象 | 处理 |
 |------|------|
-| 没有模型 | 解压 Release 的 `runtime-*.zip` 到项目根 |
+| 没有翻译模型 / llama | 解压 Release 的 **models**、**llama** 两个包到项目根 |
 | paddle 装不上 | 换 Python 3.12 |
 | GPU 起不来 | `config.json` 里 `n_gpu_layers: 0` |
 | 提示已在运行 | 托盘里已有实例 |

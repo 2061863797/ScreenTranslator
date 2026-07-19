@@ -7,7 +7,7 @@
   来源（官方）：
   - 翻译模型 GGUF: https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF
   - llama-server:  https://github.com/ggml-org/llama.cpp/releases
-  - OCR 模型:      由 PaddleOCR 首次运行自动拉取到 runtime/paddlex
+  - OCR 模型:      源码已带 runtime/paddlex/official_models；-WarmOcr 可补拉/校验
                    项目说明 https://github.com/PaddlePaddle/PaddleOCR
 
   用法（在项目根）：

@@ -27,24 +27,23 @@ OCR = PaddleOCR · Translation = local llama-server + HY-MT1.5.
 
 ### 2. Get translation model + llama (~2GB)
 
-OCR models (`runtime\paddlex\`) ship with the source.  
-Translation model and llama-server still need a separate download:
+| Asset | Source |
+|-------|--------|
+| OCR (`runtime\paddlex\`) | **Ships with source** |
+| `config.json` | Local: `.\setup.ps1` or copy `config.example.json` |
+| Translation model + llama-server | GitHub **Releases** — **two** zip packages |
 
-**Releases** → download **`runtime-*.zip`** → extract into the **project root** (same folder as `run.py`).
-
-You should see:
+Download from Releases and extract into the **project root** (next to `run.py`) so you get:
 
 ```text
 ScreenTranslator\
   run.py
-  runtime\models\*.gguf
-  runtime\llama\llama-server.exe
-  runtime\paddlex\official_models\...
+  runtime\models\*.gguf          ← models zip
+  runtime\llama\llama-server.exe ← llama zip
+  runtime\paddlex\official_models\...  ← already in source
 ```
 
-> Source code ZIP has **no translation model / llama**. Get the Release runtime package (or prepare manually per [runtime/README.en.md](./runtime/README.en.md)).
-
-Fallback: [runtime/README.en.md](./runtime/README.en.md) or `.\setup.ps1 -DownloadRuntime`.
+> Source code has **no** translation model / llama. Fallback: [runtime/README.en.md](./runtime/README.en.md) or `.\setup.ps1 -DownloadRuntime`.
 
 ### 3. Environment
 
@@ -82,7 +81,7 @@ Config tips: `n_gpu_layers: 0` without GPU; `ui_language` = `zh`/`en`. See [SETT
 
 | Issue | Fix |
 |-------|-----|
-| No model | Extract Release `runtime-*.zip` to project root |
+| Missing translation model / llama | Extract Release **models** and **llama** zips to project root |
 | Paddle install fails | Use Python 3.12 |
 | GPU fails | Set `n_gpu_layers: 0` |
 | Already running | Check system tray |

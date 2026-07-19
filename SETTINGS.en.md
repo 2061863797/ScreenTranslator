@@ -7,6 +7,7 @@ Key: `ui_language` = `zh` | `en` (whole UI).
 |--------|-----|--------|
 | UI language | `ui_language` | `zh` / `en` |
 | Target language | `target_language` | e.g. 简体中文 |
+| Save local history | `history_enabled` | plain text in `data.db`, up to 50 entries |
 | Annotation color | `annotate_text_color` | `#RRGGBB` |
 | Screenshot hotkey | `hotkey_screenshot` | default `<alt>+q` |
 | Selection hotkey | `hotkey_word` | default `<alt>+w` |

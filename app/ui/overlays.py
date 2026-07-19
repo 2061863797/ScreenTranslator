@@ -33,6 +33,7 @@ from .theme import (
     TEXT_QCOLOR,
     paint_size_grip,
 )
+from .topmost import restack_above_owner, set_overlay_layer
 
 _FLAGS_TOP = (
     Qt.WindowType.FramelessWindowHint
@@ -149,6 +150,27 @@ class SubtitleBar(_CaptureExcludedMixin, QWidget):
         self._vscroll = _SubtitleVScroll(self)
         self._grip = _SubtitleResizeGrip(self)
         self.resize(self._MIN_W, self._DEFAULT_H)
+        self._layer_owner: int | None = None
+
+    def layer_widgets(self) -> list[QWidget]:
+        """字幕主层 + 可点附属窗（控制条/滚动条/缩放把手）。"""
+        return [self, self._ctrl, self._vscroll, self._grip]
+
+    def set_layer_owner(self, owner_hwnd: int | None) -> None:
+        """窗口翻译：跟目标窗同层；None=恢复全局置顶（区域翻译）。"""
+        self._layer_owner = int(owner_hwnd) if owner_hwnd else None
+        for w in self.layer_widgets():
+            set_overlay_layer(w, self._layer_owner)
+            if w.isVisible():
+                _exclude_from_capture(w)
+
+    def restack_layer(self) -> None:
+        """目标窗 z 变化后重贴（仅窗口翻译）。"""
+        if not self._layer_owner:
+            return
+        for w in self.layer_widgets():
+            if w.isVisible():
+                restack_above_owner(w, self._layer_owner)
 
     def apply_ui_language(self):
         self._ctrl.apply_ui_language()
@@ -328,13 +350,13 @@ class SubtitleBar(_CaptureExcludedMixin, QWidget):
             self._ctrl._capture_excluded = True  # type: ignore[attr-defined]
 
     def set_text(self, text: str):
-        """更新译文：框大小不变，过长用滚动条。已显示时只重绘，不反复 raise。"""
+        """更新译文：框大小不变，过长用滚动条。已显示时只重绘，不反复 raise。
+
+        滚动位置跨轮次译文刷新保持（持续翻译改文时不把滑块打回顶部）；
+        仅在 hide 结束会话或正文被清空时归零。_reflow_text 会夹紧到新范围。
+        """
         text = text or ""
-        same = text == self._text and self.isVisible()
         self._text = text
-        # 新译文从顶部看起（同文案刷新则保持滚动位置）
-        if not same:
-            self._scroll = 0
         first = not self.isVisible()
         if first:
             if self._user_size:
@@ -343,9 +365,14 @@ class SubtitleBar(_CaptureExcludedMixin, QWidget):
                 self.resize(max(self.width(), 280), self._DEFAULT_H)
             self.show()
             _exclude_from_capture(self)
+            # 新建原生窗后重新挂到目标层
+            if self._layer_owner:
+                self.set_layer_owner(self._layer_owner)
         self._reflow_text()
         self._place_chrome()
         self._show_chrome()
+        if self._layer_owner:
+            self.restack_layer()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -374,6 +401,8 @@ class SubtitleBar(_CaptureExcludedMixin, QWidget):
         self._ctrl.hide()
         self._vscroll.hide()
         self._grip.hide()
+        # 结束本轮持续翻译后归零，下次会话从顶部看起
+        self._scroll = 0
         super().hide()
 
 
@@ -569,12 +598,23 @@ class _RegionCtrl(_CaptureExcludedMixin, QWidget):
         root.addWidget(container)
         self.setStyleSheet(CTRL_STYLE)
         self.apply_ui_language()
+        self._layer_owner: int | None = None
 
     def apply_ui_language(self):
         self._handle.setToolTip(_t("sub_drag_tip"))
         self._tip.setText(_t("hk_region"))
         self._sync_pin_text()
         self.adjustSize()
+
+    def set_layer_owner(self, owner_hwnd: int | None) -> None:
+        self._layer_owner = int(owner_hwnd) if owner_hwnd else None
+        set_overlay_layer(self, self._layer_owner)
+        if self.isVisible():
+            _exclude_from_capture(self)
+
+    def restack_layer(self) -> None:
+        if self._layer_owner and self.isVisible():
+            restack_above_owner(self, self._layer_owner)
 
     def _sync_pin_text(self):
         on = self._frame.pinned
@@ -599,7 +639,9 @@ class _RegionCtrl(_CaptureExcludedMixin, QWidget):
         _show_once(self)
         if first:
             _exclude_from_capture(self)
-        self.raise_()
+        # 区域识别框控制条保持自身 raise；窗口层由 set_layer_owner 管
+        if not self._layer_owner:
+            self.raise_()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and not self._frame.pinned:
@@ -893,6 +935,7 @@ class AnnotateCtrl(_CaptureExcludedMixin, QWidget):
         root.addWidget(container)
         self.setStyleSheet(CTRL_STYLE)
         self.apply_ui_language()
+        self._layer_owner: int | None = None
 
     def apply_ui_language(self):
         self._tip.setText(_t("ann_label"))
@@ -903,6 +946,16 @@ class AnnotateCtrl(_CaptureExcludedMixin, QWidget):
         self._btn_close.setText(_t("sub_close"))
         self._btn_close.setToolTip(_t("ann_close_tip"))
         self.adjustSize()
+
+    def set_layer_owner(self, owner_hwnd: int | None) -> None:
+        self._layer_owner = int(owner_hwnd) if owner_hwnd else None
+        set_overlay_layer(self, self._layer_owner)
+        if self.isVisible():
+            _exclude_from_capture(self)
+
+    def restack_layer(self) -> None:
+        if self._layer_owner and self.isVisible():
+            restack_above_owner(self, self._layer_owner)
 
     def _on_skip_clicked(self):
         self.skip_target_changed.emit(self._btn_skip.isChecked())
@@ -926,6 +979,8 @@ class AnnotateCtrl(_CaptureExcludedMixin, QWidget):
         _show_once(self)
         if first:
             _exclude_from_capture(self)
+        if self._layer_owner:
+            restack_above_owner(self, self._layer_owner)
 
 
 class AnnotationOverlay(_CaptureExcludedMixin, QWidget):
@@ -943,6 +998,17 @@ class AnnotationOverlay(_CaptureExcludedMixin, QWidget):
         # [(box(x1,y1,x2,y2) 相对区域, 译文), ...]
         self._items: list[tuple[tuple[int, int, int, int], str]] = []
         self._text_color = QColor("#00F0FF")
+        self._layer_owner: int | None = None
+
+    def set_layer_owner(self, owner_hwnd: int | None) -> None:
+        self._layer_owner = int(owner_hwnd) if owner_hwnd else None
+        set_overlay_layer(self, self._layer_owner)
+        if self.isVisible():
+            _exclude_from_capture(self)
+
+    def restack_layer(self) -> None:
+        if self._layer_owner and self.isVisible():
+            restack_above_owner(self, self._layer_owner)
 
     def set_text_color(self, color) -> None:
         """备注译文颜色：#RRGGBB 字符串或 QColor。"""
@@ -966,6 +1032,8 @@ class AnnotationOverlay(_CaptureExcludedMixin, QWidget):
         _show_once(self)
         if first:
             _exclude_from_capture(self)
+        if self._layer_owner:
+            restack_above_owner(self, self._layer_owner)
         self.update()
 
     def clear(self):

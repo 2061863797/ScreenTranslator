@@ -1,14 +1,14 @@
 # UI
-PySide6>=6.6
+PySide6==6.11.1
 
 # OCR (paddlepaddle-gpu is installed separately, see README)
-paddleocr>=3.0
+paddleocr==3.7.0
 
 # Screen capture & system interaction
-mss>=9.0
-pynput>=1.7
-pywin32>=306
-Pillow
+mss==10.2.0
+pynput==1.8.2
+pywin32==312
+Pillow==12.1.0
 
 # HTTP client
-requests
+requests==2.34.2

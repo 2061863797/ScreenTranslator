@@ -6,6 +6,7 @@
 """
 
 import re
+import threading
 import time
 from collections import OrderedDict
 
@@ -57,6 +58,8 @@ class Translator:
         # 共享配置引用，设置改 max_tokens 后立即生效
         self._cfg = cfg if cfg is not None else {}
         self._session = requests.Session()
+        # llama-server 默认单 slot；同时也保护 Session 与 LRU 缓存。
+        self._lock = threading.RLock()
         # 单行译文 LRU：备注模式增量翻译时命中率高
         self._line_cache: OrderedDict[tuple[str, str], str] = OrderedDict()
         self._line_cache_max = 256
@@ -105,39 +108,94 @@ class Translator:
         """粗估 token 数（中英混排偏保守，略高估防 400）。"""
         if not s:
             return 0
-        # 中文常接近 1 token/字，英文更碎；用 1.3 倍 + 余量，宁可多截少 400
+        # 中文常接近 1 token/字，英文更碎；用 1.3 倍 + 余量，宁可多分块少 400
         return max(1, int(len(s) * 1.3) + 16)
 
-    def _clip_text_for_ctx(self, text: str, template_overhead: int) -> str:
-        """按 n_ctx 截断原文，为提示模板与生成留空。
-
-        llama-server 在 prompt+生成 超过 n_ctx 时直接 400 exceed_context_size_error。
-        """
+    def _text_budget_chars(self, template_overhead: int) -> int:
+        """单个请求可容纳的保守字符数。"""
         ctx, gen_cap = self._ctx_budget()
-        # 提示固定开销 + 生成预留 + 安全余量（偏大，配合 _est_tokens 高估）
         reserve = template_overhead + gen_cap + 128
         budget_tok = max(128, ctx - reserve)
-        # 字符预算：再按估算系数收紧
-        budget_chars = max(200, int(budget_tok / 1.3))
-        if len(text) <= budget_chars:
-            return text
-        clipped = text[:budget_chars].rstrip()
-        _log.warning(
-            "原文过长已截断 chars=%d→%d ctx=%d gen_cap=%d",
-            len(text), len(clipped), ctx, gen_cap,
-        )
-        return clipped + "\n…"
+        return max(200, int(budget_tok / 1.3))
+
+    def _split_text_for_ctx(self, text: str, template_overhead: int) -> list[str]:
+        """按句号/换行优先切块，保证所有原文都进入翻译请求。"""
+        budget = self._text_budget_chars(template_overhead)
+        chunks: list[str] = []
+        rest = text
+        separators = ("\n", "。", "！", "？", ". ", "! ", "? ", "; ", "；")
+        while len(rest) > budget:
+            floor = max(1, budget // 2)
+            cut = max(rest.rfind(sep, floor, budget + 1) for sep in separators)
+            if cut < floor:
+                cut = budget
+            else:
+                # 把单字符标点留在前一块；换行/空格由下一步清理。
+                if rest[cut:cut + 1] not in ("\n", " "):
+                    cut += 1
+            part = rest[:cut].strip()
+            if part:
+                chunks.append(part)
+            rest = rest[cut:].lstrip()
+        if rest.strip():
+            chunks.append(rest.strip())
+        return chunks
 
     def translate(self, text: str, target_language: str = "简体中文") -> str:
         """自动识别源语言，翻译为 target_language。"""
-        text = self._sanitize(text)
-        if not text:
-            return ""
-        # 模板开销粗估
-        overhead = self._est_tokens(
-            _PROMPT_ZH.format(target=target_language, text="")
-        )
-        text = self._clip_text_for_ctx(text, overhead)
+        with self._lock:
+            text = self._sanitize(text)
+            if not text:
+                return ""
+            template = _PROMPT_ZH if "中文" in target_language else _PROMPT_EN
+            target = (
+                target_language if "中文" in target_language
+                else _LANG_EN_NAME.get(target_language, target_language)
+            )
+            overhead = self._est_tokens(template.format(target=target, text=""))
+            chunks = self._split_text_for_ctx(text, overhead)
+            if len(chunks) > 1:
+                _log.info("长文本分块翻译 chars=%d chunks=%d", len(text), len(chunks))
+            return "\n".join(
+                self._translate_complete(chunk, target_language) for chunk in chunks
+            )
+
+    @staticmethod
+    def _is_context_error(exc: BaseException) -> bool:
+        msg = str(exc).lower()
+        return any(key in msg for key in ("context", "exceed", "n_ctx", "上下文"))
+
+    def _translate_complete(self, text: str, target_language: str) -> str:
+        """翻译完整文本块；真实 tokenizer 超预算时继续二分，不丢原文。"""
+        try:
+            return self._translate_one(text, target_language)
+        except Exception as exc:
+            if len(text) < 2 or not self._is_context_error(exc):
+                raise
+            middle = len(text) // 2
+            separators = ("\n", "。", "！", "？", ". ", "! ", "? ", "; ", "；")
+            cut = max(text.rfind(sep, 1, middle + 1) for sep in separators)
+            if cut <= 0:
+                cut = middle
+            elif text[cut:cut + 1] not in ("\n", " "):
+                cut += 1
+            left, right = text[:cut].strip(), text[cut:].strip()
+            if not left or not right:
+                cut = middle
+                left, right = text[:cut], text[cut:]
+            _log.warning(
+                "服务端报告上下文超限，继续缩块 chars=%d→%d+%d",
+                len(text), len(left), len(right),
+            )
+            return "\n".join(
+                (
+                    self._translate_complete(left, target_language),
+                    self._translate_complete(right, target_language),
+                )
+            )
+
+    def _translate_one(self, text: str, target_language: str) -> str:
+        """翻译一个已确认能放入上下文的文本块。"""
         if "中文" in target_language:
             prompt = _PROMPT_ZH.format(target=target_language, text=text)
         else:
@@ -145,21 +203,20 @@ class Translator:
             prompt = _PROMPT_EN.format(target=en_name, text=text)
 
         max_tokens = self._effective_max_tokens(text, prompt)
-        preview = text.replace("\n", " ")[:80]
         t0 = time.time()
         try:
             out = self._chat(prompt, max_tokens)
             _log.info(
-                "翻译成功 target=%s max_tokens=%s chars=%d→%d %.2fs | %s",
+                "翻译成功 target=%s max_tokens=%s chars=%d→%d %.2fs",
                 target_language, max_tokens, len(text), len(out),
-                time.time() - t0, preview,
+                time.time() - t0,
             )
             return out
         except Exception as e:
             _log.error(
-                "翻译失败 target=%s max_tokens=%s chars=%d %.2fs | %s | %s",
+                "翻译失败 target=%s max_tokens=%s chars=%d %.2fs | %s",
                 target_language, max_tokens, len(text),
-                time.time() - t0, preview, e,
+                time.time() - t0, e,
             )
             raise
 
@@ -177,7 +234,7 @@ class Translator:
     def _chat(self, prompt: str, max_tokens: int) -> str:
         """发 chat/completions；失败时带上服务端错误正文。
 
-        遇 400 上下文超限时，将 prompt 减半并收紧 max_tokens 后重试一次。
+        遇 400 上下文超限时先收紧生成长度；仍失败则由上层缩小原文块。
         """
         # 二次保险：若仍可能超上下文，再砍生成长度
         ctx, _ = self._ctx_budget()
@@ -185,11 +242,7 @@ class Translator:
         if used + max_tokens + 16 > ctx:
             max_tokens = max(64, ctx - used - 16)
         if used + 64 > ctx:
-            # 提示本身过大：硬截断 prompt 尾部
-            keep = max(200, int((ctx - 160) / 1.3))
-            prompt = prompt[:keep] + "\n…"
-            max_tokens = max(64, min(max_tokens, 256))
-            _log.warning("提示过长再次截断 prompt_chars≈%d", len(prompt))
+            raise ValueError("翻译提示超过上下文上限，未发送不完整内容")
 
         last_err: Exception | None = None
         for attempt in range(2):
@@ -201,7 +254,7 @@ class Translator:
                     "top_p": 0.8,
                     "max_tokens": int(max_tokens),
                 },
-                timeout=self.timeout,
+                timeout=(3.05, self.timeout),
             )
             if resp.ok:
                 data = resp.json()
@@ -218,11 +271,9 @@ class Translator:
                 "context" in low or "exceed" in low or "n_ctx" in low
             )
             if is_ctx and attempt == 0:
-                keep = max(200, len(prompt) // 2)
-                prompt = prompt[:keep].rstrip() + "\n…"
                 max_tokens = max(64, min(max_tokens // 2, 256))
                 _log.warning(
-                    "400 上下文超限，减半重试 prompt≈%d max_tokens=%d",
+                    "400 上下文超限，保留完整原文并收紧生成长度重试 prompt≈%d max_tokens=%d",
                     len(prompt), max_tokens,
                 )
                 continue
@@ -231,29 +282,20 @@ class Translator:
 
     def _translate_prompt(self, prompt: str, target_language: str, preview: str) -> str:
         prompt = self._sanitize(prompt)
-        # 多行提示也可能超长
-        overhead = 32
-        # 用整段 prompt 当「原文」裁剪：保留模板头
-        if self._est_tokens(prompt) > self._ctx_budget()[0] // 2:
-            # 从末尾保留模板前缀约 80 字 + 中间正文
-            head = prompt[:120]
-            body = prompt[120:]
-            body = self._clip_text_for_ctx(body, overhead + self._est_tokens(head))
-            prompt = head + body
         max_tokens = self._effective_max_tokens(preview, prompt)
         t0 = time.time()
         try:
             out = self._chat(prompt, max_tokens)
             _log.info(
-                "翻译成功 target=%s chars~%d→%d %.2fs | %s",
+                "翻译成功 target=%s chars~%d→%d %.2fs",
                 target_language, len(preview), len(out),
-                time.time() - t0, preview[:80],
+                time.time() - t0,
             )
             return out
         except Exception as e:
             _log.error(
-                "翻译失败 target=%s %.2fs | %s | %s",
-                target_language, time.time() - t0, preview[:80], e,
+                "翻译失败 target=%s chars~%d %.2fs | %s",
+                target_language, len(preview), time.time() - t0, e,
             )
             raise
 
@@ -299,8 +341,11 @@ class Translator:
         else:
             en_name = _LANG_EN_NAME.get(target_language, target_language)
             prompt = _PROMPT_LINES_EN.format(target=en_name, text=numbered)
+        # 批量提示放不下就交给上层分块/逐行，绝不裁掉某些行。
+        if self._est_tokens(prompt) + 64 > self._ctx_budget()[0]:
+            return None
         raw = self._translate_prompt(
-            prompt, target_language, preview=numbered.replace("\n", " ")[:80]
+            prompt, target_language, preview=numbered.replace("\n", " ")
         )
         parsed = self._parse_numbered(raw, len(batch))
         if parsed is not None:
@@ -322,6 +367,12 @@ class Translator:
         备注模式会频繁多行 OCR：优先一次请求，避免动辄 N 次 llama 调用。
         命中行缓存的原文直接复用。
         """
+        with self._lock:
+            return self._translate_lines_locked(lines, target_language)
+
+    def _translate_lines_locked(
+        self, lines: list[str], target_language: str
+    ) -> list[str]:
         clean = [ln.strip() for ln in lines]
         results = ["" for _ in lines]
         need: list[tuple[int, str]] = []
@@ -340,7 +391,13 @@ class Translator:
 
         # 先整批编号翻译
         batch_src = [ln for _, ln in need]
-        parsed = self._translate_numbered_batch(batch_src, target_language)
+        try:
+            parsed = self._translate_numbered_batch(batch_src, target_language)
+        except Exception as exc:
+            if not self._is_context_error(exc):
+                raise
+            _log.warning("整批行译超过真实上下文，改用小批次")
+            parsed = None
         if parsed is not None:
             for (i, src), tr in zip(need, parsed):
                 results[i] = tr
@@ -357,7 +414,13 @@ class Translator:
         for start in range(0, len(need), chunk_size):
             chunk = need[start : start + chunk_size]
             chunk_src = [ln for _, ln in chunk]
-            got = self._translate_numbered_batch(chunk_src, target_language)
+            try:
+                got = self._translate_numbered_batch(chunk_src, target_language)
+            except Exception as exc:
+                if not self._is_context_error(exc):
+                    raise
+                _log.warning("行译小批次仍超过真实上下文，改用逐行")
+                got = None
             if got is not None:
                 for (i, src), tr in zip(chunk, got):
                     results[i] = tr
@@ -370,7 +433,8 @@ class Translator:
             try:
                 tr = self.translate(src, target_language)
             except Exception:
-                tr = ""
+                _log.exception("逐行翻译失败 index=%d chars=%d", i, len(src))
+                raise
             results[i] = tr
             if tr:
                 self._cache_put(src, target_language, tr)
@@ -379,3 +443,8 @@ class Translator:
             len(need), len(failed), hits,
         )
         return results
+
+    def close(self) -> None:
+        """所有翻译任务结束后释放 HTTP 连接池。"""
+        with self._lock:
+            self._session.close()

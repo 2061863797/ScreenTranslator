@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -41,6 +42,7 @@ def main() -> int:
         "cache_type_v": "q8_0",
         "target_language": "简体中文",
         "max_tokens": 512,
+        "history_enabled": True,
         "ocr_lang": None,
         "ocr_max_side": 1600,
         "ocr_score_min": 0.45,
@@ -60,14 +62,18 @@ def main() -> int:
     }
     if example.is_file():
         try:
-            defaults.update(json.loads(example.read_text(encoding="utf-8")))
+            raw = json.loads(example.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                defaults.update(raw)
         except (OSError, json.JSONDecodeError):
             pass
 
     cfg = dict(defaults)
     if cfg_path.is_file():
         try:
-            cfg.update(json.loads(cfg_path.read_text(encoding="utf-8")))
+            raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                cfg.update(raw)
         except (OSError, json.JSONDecodeError):
             pass
 
@@ -77,10 +83,12 @@ def main() -> int:
     cfg["n_gpu_layers"] = ngl
     cfg["threads"] = threads
 
-    cfg_path.write_text(
+    tmp = cfg_path.with_name(cfg_path.name + ".tmp")
+    tmp.write_text(
         json.dumps(cfg, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    os.replace(tmp, cfg_path)
     print(f"n_gpu_layers={ngl} threads={threads} use_gpu={use_gpu}")
     return 0
 

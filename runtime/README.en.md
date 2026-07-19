@@ -1,40 +1,63 @@
-# runtime
+# runtime assets
 
-| Folder | In source repo? | Notes |
-|--------|-----------------|--------|
-| `paddlex/official_models` | Yes | OCR models |
-| `models/` | No | GGUF — Releases **models** zip |
-| `llama/` | No | llama-server + DLLs — Releases **llama** zip |
+The `runtime` directory has three parts:
 
-`config.json` is local (not in git). Create with `.\setup.ps1` or copy `config.example.json`.
+| Folder | Supplied by | Content |
+|--------|-------------|---------|
+| `paddlex\official_models\` | Source package | PaddleOCR detection and recognition models |
+| `models\` | Release **models** asset | HY-MT GGUF translation model |
+| `llama\` | Release **llama** asset | `llama-server.exe` and its DLLs |
 
-## Two Release packages
+`config.json` and `venv` are generated locally on each PC and are not runtime Release assets.
 
-1. Download the **models** and **llama** zips (not a single full `runtime-*.zip`).
-2. Extract into the **project root** (next to `run.py`) so you have:
+## Default Release setup
+
+Releases provide only the **models** and **llama** assets. The PaddleX OCR models already ship with the source package and do not need a separate download.
+
+The current `llama` asset is the NVIDIA CUDA 13 build. It is intended for an NVIDIA GPU with a recent working driver. CUDA runtime DLLs are included; installing the CUDA Toolkit separately is not required.
+
+After extracting both the **models** and **llama** assets into the current `runtime\` directory, the layout must be:
 
 ```text
 runtime\models\HY-MT1.5-1.8B-Q4_K_M.gguf
-runtime\llama\llama-server.exe   (DLLs alongside)
+runtime\llama\llama-server.exe
+runtime\llama\*.dll
+runtime\paddlex\official_models\PP-OCRv6_medium_det\
+runtime\paddlex\official_models\PP-OCRv6_medium_rec\
 ```
 
-If the zip already contains a `models\` / `llama\` folder, extract under `runtime\`.
+Check the assets with:
 
-## Fallback (no Release)
+```powershell
+.\setup.ps1 -Check
+```
+
+## CPU setup or missing Release assets
+
+Without an NVIDIA GPU, download and use the CPU llama build:
+
+```powershell
+.\setup.ps1 -CpuOnly -DownloadRuntime
+```
+
+If the default CUDA llama asset was already extracted, replace it with the CPU build:
+
+```powershell
+.\scripts\download_runtime.ps1 -CpuOnly -SkipModel -Force
+.\setup.ps1 -CpuOnly
+```
+
+With NVIDIA but without the Release assets:
 
 ```powershell
 .\setup.ps1 -DownloadRuntime
-# or
-.\scripts\download_runtime.ps1
 ```
 
-| Asset | URL |
-|-------|-----|
-| Model | https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF |
-| llama | https://github.com/ggml-org/llama.cpp/releases |
+Automatic downloads use these official sources:
 
-Flatten llama exe + DLLs into `runtime\llama\`.
+| Asset | Official URL |
+|-------|--------------|
+| HY-MT GGUF | https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF |
+| llama.cpp | https://github.com/ggml-org/llama.cpp/releases |
 
-Check: `.\setup.ps1 -Check`
-
-**Docs may be AI-generated; verify yourself.**
+See the root [README.en.md](../README.en.md) for the complete installation guide.

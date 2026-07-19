@@ -26,8 +26,6 @@ class Storage:
                     mode TEXT NOT NULL
                 )"""
             )
-            # 旧版本可能存在生词本表，功能已移除，顺手清掉
-            self._conn.execute("DROP TABLE IF EXISTS vocabulary")
             self._conn.commit()
 
     def add_history(self, source: str, translation: str, mode: str) -> None:
@@ -51,6 +49,12 @@ class Storage:
                 (limit,),
             )
             return cur.fetchall()
+
+    def clear_history(self) -> None:
+        """只清空翻译历史；不触碰旧版本或其它功能的数据表。"""
+        with self._lock:
+            self._conn.execute("DELETE FROM history")
+            self._conn.commit()
 
     def close(self) -> None:
         with self._lock:

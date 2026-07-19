@@ -92,7 +92,7 @@ class RegionSelector(QWidget):
         try:
             import mss
 
-            with mss.mss() as sct:
+            with mss.MSS() as sct:
                 mon = sct.monitors[0]  # 全部监视器合并
                 sct.grab(mon)
         except Exception:

@@ -2,6 +2,8 @@
 """全局配置：加载、保存、默认值。"""
 
 import json
+import logging
+import os
 from pathlib import Path
 
 from .paths import (
@@ -14,6 +16,8 @@ from .paths import (
 
 # 再导出，兼容 from app.config import CONFIG_PATH
 __all__ = ["CONFIG_PATH", "DEFAULTS", "load", "save"]
+
+_log = logging.getLogger("st.config")
 
 DEFAULTS = {
     # llama.cpp / 模型：默认用项目内 runtime/（整夹可带走）
@@ -43,6 +47,8 @@ DEFAULTS = {
     "ui_language": "zh",
     # 单次生成上限；屏幕翻译通常几百 token 内，过大只浪费上限预留
     "max_tokens": 512,
+    # 本地明文历史；可在设置中关闭，并可在历史窗口手动清空
+    "history_enabled": True,
 
     # OCR
     "ocr_lang": None,                # None = PP-OCRv5 自动多语种
@@ -79,13 +85,19 @@ DEFAULTS = {
 def _migrate_legacy(cfg: dict, raw: dict) -> None:
     """旧版共用 watch_* 迁移到 window_/region_ 前缀（仅当新键未在文件中出现时）。"""
     if "watch_interval_ms" in raw:
-        v = int(raw["watch_interval_ms"])
+        try:
+            v = int(raw["watch_interval_ms"])
+        except (TypeError, ValueError):
+            v = DEFAULTS["window_watch_interval_ms"]
         if "window_watch_interval_ms" not in raw:
             cfg["window_watch_interval_ms"] = v
         if "region_watch_interval_ms" not in raw:
             cfg["region_watch_interval_ms"] = v
     if "watch_diff_threshold" in raw:
-        v = float(raw["watch_diff_threshold"])
+        try:
+            v = float(raw["watch_diff_threshold"])
+        except (TypeError, ValueError):
+            v = DEFAULTS["window_watch_diff_threshold"]
         if "window_watch_diff_threshold" not in raw:
             cfg["window_watch_diff_threshold"] = v
         if "region_watch_diff_threshold" not in raw:
@@ -103,6 +115,45 @@ def _migrate_legacy(cfg: dict, raw: dict) -> None:
             cfg["window_annotate_skip_target_lang"] = v
         if "region_annotate_skip_target_lang" not in raw:
             cfg["region_annotate_skip_target_lang"] = v
+
+
+def _validated_values(raw: object) -> dict:
+    """只接收对象配置；已知键类型不合法时回退默认值。"""
+    if not isinstance(raw, dict):
+        raise ValueError("config.json 顶层必须是 JSON 对象")
+    out = dict(raw)
+    for key, default in DEFAULTS.items():
+        if key not in raw:
+            continue
+        value = raw[key]
+        valid = True
+        if default is None:
+            valid = value is None or isinstance(value, str)
+        elif isinstance(default, bool):
+            valid = isinstance(value, bool)
+        elif isinstance(default, int):
+            valid = isinstance(value, int) and not isinstance(value, bool)
+        elif isinstance(default, float):
+            valid = isinstance(value, (int, float)) and not isinstance(value, bool)
+        elif isinstance(default, str):
+            valid = isinstance(value, str)
+        if not valid:
+            _log.warning("配置项 %s 类型无效，使用默认值", key)
+            out.pop(key, None)
+
+    if "server_port" in out and not 1 <= out["server_port"] <= 65535:
+        out.pop("server_port")
+    for key in ("window_watch_interval_ms", "region_watch_interval_ms"):
+        if key in out and not 50 <= out[key] <= 60000:
+            out.pop(key)
+    for key in (
+        "window_watch_diff_threshold",
+        "region_watch_diff_threshold",
+        "ocr_score_min",
+    ):
+        if key in out and not 0 <= float(out[key]) <= 1:
+            out.pop(key)
+    return out
 
 
 def _prefer_bundled_runtime(cfg: dict) -> None:
@@ -129,10 +180,12 @@ def load() -> dict:
     raw: dict = {}
     if CONFIG_PATH.exists():
         try:
-            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            parsed = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            raw = _validated_values(parsed)
             cfg.update(raw)
-        except (json.JSONDecodeError, OSError):
-            pass  # 配置损坏时回退默认值，不阻塞启动
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            _log.warning("配置读取失败，使用默认值: %s", e)
+            raw = {}
     _migrate_legacy(cfg, raw)
     # 迁移后内存里可去掉旧共用键（磁盘仍保留到下次 save）
     if "window_annotate_skip_target_lang" in cfg and "region_annotate_skip_target_lang" in cfg:
@@ -153,6 +206,7 @@ def save(cfg: dict) -> None:
     for key in ("llama_dir", "model_path"):
         if key in data and data[key]:
             data[key] = to_portable_path(data[key])
-    CONFIG_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, CONFIG_PATH)

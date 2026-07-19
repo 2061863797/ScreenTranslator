@@ -140,6 +140,16 @@ CPU 模式可以使用，但 OCR 和翻译速度会明显慢于 NVIDIA GPU。
 winget install Python.Python.3.12
 ```
 
+## 功能展示
+
+| 截图翻译 | 选择窗口持续翻译目标 |
+|:---------:|:--------------------:|
+| ![截图翻译结果](./docs/images/screenshot-translation-result.png) | ![窗口持续翻译目标选择](./docs/images/window-picker.png) |
+
+| 持续翻译字幕显示 | 区域实时翻译备注模式 |
+|:----------------:|:--------------------:|
+| ![持续翻译字幕显示](./docs/images/live-translation-overlay.png) | ![区域实时翻译备注模式](./docs/images/inline-annotation-mode.png) |
+
 ## 切换翻译模型
 
 软件不会自动下载额外模型。需要切换时：

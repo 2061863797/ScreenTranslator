@@ -138,6 +138,16 @@ To install Python first:
 winget install Python.Python.3.12
 ```
 
+## Screenshots
+
+| Screenshot translation | Select a live-translation window |
+|:----------------------:|:--------------------------------:|
+| ![Screenshot translation result](./docs/images/screenshot-translation-result.png) | ![Live-translation window picker](./docs/images/window-picker.png) |
+
+| Live-translation subtitle overlay | Inline annotation mode |
+|:---------------------------------:|:----------------------:|
+| ![Live-translation subtitle overlay](./docs/images/live-translation-overlay.png) | ![Inline annotation mode](./docs/images/inline-annotation-mode.png) |
+
 ## Switch translation models
 
 The app does not download additional models automatically. To switch models:

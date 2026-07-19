@@ -42,7 +42,12 @@ function Write-Ok([string]$m)   { Write-Host "  [OK] $m" -ForegroundColor Green 
 function Write-Warn2([string]$m){ Write-Host "  [!] $m" -ForegroundColor Yellow }
 function Write-Err2([string]$m) { Write-Host "  [X] $m" -ForegroundColor Red }
 
-function Get-File([string]$Url, [string]$OutPath) {
+function Get-File(
+    [string]$Url,
+    [string]$OutPath,
+    [string]$ExpectedSha256 = "",
+    [long]$MinBytes = 1
+) {
     $dir = Split-Path $OutPath -Parent
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     Write-Host "  GET $Url"
@@ -50,16 +55,42 @@ function Get-File([string]$Url, [string]$OutPath) {
     # TLS
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     # 跟随重定向；大文件用 WebClient 显示简单进度
+    $part = "$OutPath.part"
+    if (Test-Path -LiteralPath $part) { Remove-Item -LiteralPath $part -Force }
     $wc = New-Object System.Net.WebClient
     $wc.Headers.Add("User-Agent", "ScreenTranslator-setup")
     try {
-        $wc.DownloadFile($Url, $OutPath)
+        $wc.DownloadFile($Url, $part)
     } finally {
         $wc.Dispose()
     }
-    if (-not (Test-Path $OutPath)) { throw "下载失败: $OutPath" }
-    $mb = [math]::Round((Get-Item $OutPath).Length / 1MB, 1)
+    if (-not (Test-Path -LiteralPath $part)) { throw "下载失败: $OutPath" }
+    $length = (Get-Item -LiteralPath $part).Length
+    if ($length -lt $MinBytes) {
+        Remove-Item -LiteralPath $part -Force
+        throw "下载文件过小（$length bytes）: $OutPath"
+    }
+    if ($ExpectedSha256) {
+        $actual = (Get-FileHash -LiteralPath $part -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $ExpectedSha256.ToLowerInvariant()) {
+            Remove-Item -LiteralPath $part -Force
+            throw "SHA256 校验失败: $OutPath"
+        }
+    }
+    Move-Item -LiteralPath $part -Destination $OutPath -Force
+    $mb = [math]::Round($length / 1MB, 1)
     Write-Ok ("完成 {0} MB" -f $mb)
+}
+
+function Test-Gguf([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    if ((Get-Item -LiteralPath $Path).Length -lt 100MB) { return $false }
+    $fs = [System.IO.File]::OpenRead($Path)
+    try {
+        $b = New-Object byte[] 4
+        [void]$fs.Read($b, 0, 4)
+        return ([System.Text.Encoding]::ASCII.GetString($b) -eq "GGUF")
+    } finally { $fs.Dispose() }
 }
 
 function Test-Nvidia {
@@ -76,13 +107,31 @@ if (-not $SkipModel) {
     Write-Step "翻译模型 HY-MT1.5-1.8B ($Quant)"
     $name = "HY-MT1.5-1.8B-$Quant.gguf"
     $dest = Join-Path $Root "runtime\models\$name"
-    if ((Test-Path $dest) -and -not $Force) {
-        Write-Ok "已存在，跳过: $dest （-Force 可重下）"
+    $knownSha = ""
+    if ($name -eq "HY-MT1.5-1.8B-Q4_K_M.gguf") {
+        $knownSha = "4383ac0c3c8e476de98ff979c2a3f069f8c4fb385e7860cf2d28da896cc477c7"
+    }
+    $existingValid = Test-Gguf $dest
+    if ($existingValid -and $knownSha) {
+        $existingValid = ((Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash.ToLowerInvariant() -eq $knownSha)
+    }
+    if ((Test-Path $dest) -and -not $Force -and $existingValid) {
+        Write-Ok "已存在且格式有效，跳过: $dest （-Force 可重下）"
     } else {
         # HuggingFace resolve 直链（需能访问 huggingface.co）
         $url = "https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF/resolve/main/$name"
         try {
-            Get-File $url $dest
+            $sha = ""
+            $sha = $knownSha
+            try {
+                $meta = Invoke-RestMethod -Uri "https://huggingface.co/api/models/tencent/HY-MT1.5-1.8B-GGUF?blobs=true" -Headers @{"User-Agent"="ScreenTranslator-setup"}
+                $entry = @($meta.siblings) | Where-Object { $_.rfilename -eq $name } | Select-Object -First 1
+                if ($entry.lfs.sha256) { $sha = [string]$entry.lfs.sha256 }
+            } catch {
+                Write-Warn2 "未取得 HuggingFace SHA256，将使用 GGUF 格式与大小校验"
+            }
+            Get-File $url $dest $sha 100MB
+            if (-not (Test-Gguf $dest)) { throw "下载结果不是有效 GGUF" }
         } catch {
             Write-Err2 "自动下载失败: $_"
             Write-Warn2 "请手动下载后放到 runtime\models\ :"
@@ -106,7 +155,15 @@ if (-not $SkipLlama) {
     $llamaDir = Join-Path $Root "runtime\llama"
     $server = Join-Path $llamaDir "llama-server.exe"
     if ((Test-Path $server) -and -not $Force) {
-        Write-Ok "已存在 llama-server.exe，跳过 （-Force 可重下）"
+        $oldEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        & $server --version 1>$null 2>$null
+        $serverCode = $LASTEXITCODE
+        $ErrorActionPreference = $oldEap
+        if ($serverCode -ne 0) {
+            throw "现有 llama-server 无法运行；请使用 -Force 重新下载"
+        }
+        Write-Ok "已存在且可运行 llama-server.exe，跳过 （-Force 可重下）"
     } else {
         $wantCuda = (-not $CpuOnly) -and (Test-Nvidia)
         if ($CpuOnly) {
@@ -159,15 +216,22 @@ if (-not $SkipLlama) {
             throw "无匹配 asset"
         }
 
-        $tmp = Join-Path $env:TEMP "st_llama_$tag"
-        if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
+        $safeTag = $tag -replace '[^A-Za-z0-9._-]', '_'
+        $tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+        $tmp = [System.IO.Path]::GetFullPath((Join-Path $tempRoot "st_llama_$safeTag"))
+        if (-not $tmp.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "临时目录越界: $tmp"
+        }
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
         New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 
         $binZip = Join-Path $tmp $bin.name
-        Get-File $bin.browser_download_url $binZip
+        $binSha = if ($bin.digest -match '^sha256:(.+)$') { $Matches[1] } else { "" }
+        Get-File $bin.browser_download_url $binZip $binSha 1MB
         if ($rt) {
             $rtZip = Join-Path $tmp $rt.name
-            Get-File $rt.browser_download_url $rtZip
+            $rtSha = if ($rt.digest -match '^sha256:(.+)$') { $Matches[1] } else { "" }
+            Get-File $rt.browser_download_url $rtZip $rtSha 1MB
         }
 
         if (-not (Test-Path $llamaDir)) { New-Item -ItemType Directory -Force -Path $llamaDir | Out-Null }
@@ -195,7 +259,7 @@ if (-not $SkipLlama) {
             throw "解压后未找到 llama-server.exe，请检查 zip 结构"
         }
         Write-Ok "llama 已安装到 $llamaDir"
-        Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
     }
 } else {
     Write-Warn2 "跳过 llama 下载 (-SkipLlama)"

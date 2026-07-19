@@ -57,17 +57,31 @@ function Get-CpuThreadHint {
     }
 }
 
+function Test-SupportedPython {
+    param([string]$Exe)
+    if (-not $Exe -or -not (Test-Path -LiteralPath $Exe)) { return $false }
+    try {
+        & $Exe -c "import sys; raise SystemExit(0 if sys.version_info[:2] in ((3,11),(3,12),(3,13)) else 1)" 2>$null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
 function Find-Python {
     param([string]$Prefer)
     if ($Prefer -and (Test-Path -LiteralPath $Prefer)) {
-        return (Resolve-Path -LiteralPath $Prefer).Path
+        $resolved = (Resolve-Path -LiteralPath $Prefer).Path
+        if (Test-SupportedPython $resolved) { return $resolved }
+        Write-Warn2 "指定的 Python 版本不受支持（仅 3.11～3.13）: $resolved"
+        return $null
     }
     foreach ($ver in @("3.12", "3.13", "3.11")) {
         try {
             $p = & py "-$ver" -c "import sys; print(sys.executable)" 2>$null
             if ($p) {
                 $p = $p.ToString().Trim()
-                if (Test-Path -LiteralPath $p) { return $p }
+                if ((Test-Path -LiteralPath $p) -and (Test-SupportedPython $p)) { return $p }
             }
         } catch {}
     }
@@ -75,7 +89,7 @@ function Find-Python {
         $p = & python -c "import sys; print(sys.executable)" 2>$null
         if ($p) {
             $p = $p.ToString().Trim()
-            if (Test-Path -LiteralPath $p) { return $p }
+            if ((Test-Path -LiteralPath $p) -and (Test-SupportedPython $p)) { return $p }
         }
     } catch {}
     return $null
@@ -121,18 +135,26 @@ function Install-Paddle {
     if ($WantGpu) { $kind = "GPU" }
     Write-Step "安装 PaddlePaddle ($kind)"
     if ($WantGpu) {
-        $idx = "https://www.paddlepaddle.org.cn/packages/stable/cu126/"
+        & $VenvPy -m pip uninstall -y paddlepaddle 2>$null
+        $idx = "https://www.paddlepaddle.org.cn/packages/stable/cu129/"
         Write-Host "  源: $idx"
-        & $VenvPy -m pip install "paddlepaddle-gpu==3.3.1" -i $idx
+        & $VenvPy -c "import paddle; raise SystemExit(0 if paddle.__version__ == '3.3.1' and str(paddle.version.cuda()).startswith('12.9') else 1)" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok "已有匹配的 Paddle GPU 3.3.1 / CUDA 12.9"
+        } else {
+            & $VenvPy -m pip install --upgrade --force-reinstall "paddlepaddle-gpu==3.3.1" -i $idx
+        }
         if ($LASTEXITCODE -ne 0) {
             Write-Warn2 "GPU 版安装失败，回退 CPU 版"
+            & $VenvPy -m pip uninstall -y paddlepaddle-gpu 2>$null
             & $VenvPy -m pip install "paddlepaddle==3.3.1" -i "https://www.paddlepaddle.org.cn/packages/stable/cpu/"
         }
     } else {
+        & $VenvPy -m pip uninstall -y paddlepaddle-gpu 2>$null
         & $VenvPy -m pip install "paddlepaddle==3.3.1" -i "https://www.paddlepaddle.org.cn/packages/stable/cpu/"
     }
     if ($LASTEXITCODE -ne 0) {
-        Write-Warn2 "Paddle 安装可能失败，请查看上方 pip 输出"
+        throw "Paddle 安装失败，请查看上方 pip 输出"
     } else {
         Write-Ok "Paddle 安装步骤完成"
     }
@@ -169,7 +191,17 @@ function Test-Runtime {
     $ocr = Join-Path $Root "runtime\paddlex\official_models"
 
     if (Test-Path -LiteralPath $llama) {
-        Write-Ok "llama-server: $llama"
+        $oldEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        & $llama --version 1>$null 2>$null
+        $llamaCode = $LASTEXITCODE
+        $ErrorActionPreference = $oldEap
+        if ($llamaCode -eq 0) {
+            Write-Ok "llama-server: $llama"
+        } else {
+            Write-Err2 "llama-server 无法运行或依赖 DLL 不完整: $llama"
+            $ok = $false
+        }
     } else {
         Write-Err2 "缺少 $llama"
         $ok = $false
@@ -177,13 +209,39 @@ function Test-Runtime {
 
     if (Test-Path -LiteralPath $model) {
         $mb = [math]::Round((Get-Item -LiteralPath $model).Length / 1MB, 1)
-        Write-Ok "翻译模型: $model ($mb MB)"
+        $fs = [System.IO.File]::OpenRead($model)
+        try {
+            $magicBytes = New-Object byte[] 4
+            [void]$fs.Read($magicBytes, 0, 4)
+            $magic = [System.Text.Encoding]::ASCII.GetString($magicBytes)
+        } finally { $fs.Dispose() }
+        if ($magic -eq "GGUF" -and $mb -gt 100) {
+            $expectedModelSha = "4383ac0c3c8e476de98ff979c2a3f069f8c4fb385e7860cf2d28da896cc477c7"
+            $actualModelSha = (Get-FileHash -LiteralPath $model -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actualModelSha -eq $expectedModelSha) {
+                Write-Ok "翻译模型: $model ($mb MB，SHA256 正确)"
+            } else {
+                Write-Err2 "翻译模型 SHA256 不匹配: $model"
+                $ok = $false
+            }
+        } else {
+            Write-Err2 "翻译模型文件不完整或不是 GGUF: $model"
+            $ok = $false
+        }
     } else {
         Write-Err2 "缺少 $model"
         $ok = $false
     }
 
-    if (Test-Path -LiteralPath $ocr) {
+    $ocrRequired = @("PP-OCRv6_medium_det", "PP-OCRv6_medium_rec")
+    $ocrReady = $true
+    foreach ($name in $ocrRequired) {
+        $dir = Join-Path $ocr $name
+        if (-not (Test-Path -LiteralPath $dir) -or -not (Get-ChildItem -LiteralPath $dir -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+            $ocrReady = $false
+        }
+    }
+    if ($ocrReady) {
         $names = @(Get-ChildItem -LiteralPath $ocr -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name})
         Write-Ok ("OCR 模型目录: $ocr (" + ($names -join ", ") + ")")
     } else {
@@ -201,15 +259,14 @@ function Test-Imports {
     param([string]$VenvPy)
     Write-Step "冒烟导入"
     if (-not (Test-Path -LiteralPath $VenvPy)) {
-        Write-Warn2 "无 venv，跳过导入检查"
-        return
+        throw "缺少 venv，无法检查 Python 依赖"
     }
     $script = Join-Path $Root "scripts\smoke_import.py"
     & $VenvPy $script
     if ($LASTEXITCODE -eq 0) {
         Write-Ok "app 导入成功"
     } else {
-        Write-Err2 "app 导入失败"
+        throw "真实依赖或 app.main 导入失败"
     }
 }
 
@@ -263,18 +320,23 @@ $runtimeOk = Test-Runtime
 
 if ($Check) {
     Write-Step "仅检查模式 (-Check)"
+    $checkOk = $runtimeOk
     $venvPy = Join-Path $Root "venv\Scripts\python.exe"
     if (Test-Path -LiteralPath $venvPy) {
+        if (-not (Test-SupportedPython $venvPy)) {
+            throw "venv Python 版本不受支持（仅 3.11～3.13）"
+        }
         Test-Imports -VenvPy $venvPy
     } else {
-        Write-Warn2 "尚未创建 venv，完整安装请运行: .\setup.ps1"
+        Write-Err2 "尚未创建 venv，完整安装请运行: .\setup.ps1"
+        $checkOk = $false
     }
     Write-Host ""
-    if ($runtimeOk) {
+    if ($checkOk) {
         Write-Ok "体检结束"
         exit 0
     }
-    Write-Warn2 "体检结束（runtime 有缺失）"
+    Write-Warn2 "体检结束（运行环境或 runtime 有缺失）"
     exit 2
 }
 
@@ -288,6 +350,9 @@ if (-not $basePy) {
 Write-Ok "基础 Python: $basePy"
 
 $venvPy = Ensure-Venv -BasePython $basePy
+if (-not (Test-SupportedPython $venvPy)) {
+    throw "现有 venv 不是受支持的 Python 3.11～3.13；请删除 venv 后重新运行 setup.ps1"
+}
 Install-PipPackages -VenvPy $venvPy
 Install-Paddle -VenvPy $venvPy -WantGpu $useGpu
 Ensure-Config -UseGpu $useGpu -Threads $threads

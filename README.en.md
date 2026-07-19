@@ -150,6 +150,8 @@ winget install Python.Python.3.12
 
 Use the tray menu for settings, history, and logs. Only one window or region live-translation session can run at a time.
 
+Up to 50 history entries are stored as plain text in `data.db` by default. Disable new records under Settings → General, or clear them from the History window after confirmation.
+
 ## Troubleshooting
 
 | Issue | Fix |

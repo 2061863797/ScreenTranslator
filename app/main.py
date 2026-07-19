@@ -2,8 +2,9 @@
 """主程序：托盘常驻，热键调度各功能。"""
 
 import sys
+import threading
 
-from PySide6.QtCore import QEventLoop, QSharedMemory, QTimer
+from PySide6.QtCore import QEventLoop, QMimeData, QObject, QSharedMemory, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QCursor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -42,6 +43,22 @@ from .workers import OcrTranslateWorker
 _INSTANCE_KEY = "ScreenTranslator_SingleInstance_v1"
 
 
+class _PreloadSignals(QObject):
+    """把普通 Python 线程的预热结果安全送回 Qt 主线程。"""
+
+    status = Signal(str, str, str)
+
+
+def _clone_mime_data(source) -> QMimeData:
+    """物化剪贴板全部 MIME 格式，之后可原样恢复。"""
+    clone = QMimeData()
+    if source is None:
+        return clone
+    for fmt in source.formats():
+        clone.setData(fmt, source.data(fmt))
+    return clone
+
+
 def _tray_icon() -> QIcon:
     """优先用打包的 icon.ico，缺失时回退纯色方块。"""
     ico = ICON_ICO
@@ -61,17 +78,9 @@ class App:
     def __init__(self):
         setup_logging()
         self.log = get_logger("app")
-        # 减少高分屏/组合窗闪烁（须在创建 QApplication 前尽量设置）
-        from PySide6.QtCore import Qt as _Qt
-
-        try:
-            QApplication.setHighDpiScaleFactorRoundingPolicy(
-                _Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-            )
-        except Exception:
-            pass
         self.qapp = QApplication.instance() or QApplication(sys.argv)
         self.qapp.setQuitOnLastWindowClosed(False)
+        capture.configure_qt_screens(self.qapp.screens())
 
         self.cfg = config.load()
         set_language(self.cfg.get("ui_language", "zh"))
@@ -133,13 +142,21 @@ class App:
         )
 
         self._workers: list[OcrTranslateWorker] = []  # 防止线程被垃圾回收
+        self._retired_watchers: list[WindowWatcher] = []
+        self._preload_threads: list[threading.Thread] = []
+        self._preload_signals = _PreloadSignals()
+        self._preload_signals.status.connect(self._on_preload_status)
+        self._preload_status = {"llama": "pending", "ocr": "pending"}
+        self._quitting = False
+        self._shutdown_server_thread: threading.Thread | None = None
+        self._word_copy_busy = False
+        self._word_old_mime: QMimeData | None = None
         self._watcher: WindowWatcher | None = None
         self._watch_hwnd: int | None = None
         self._watch_region: tuple[int, int, int, int] | None = None  # 区域监视时的选区
         self._watch_rect: tuple[int, int, int, int] | None = None  # 当前监视几何
         self._watch_profile: str | None = None  # "window" | "region"
         self._pending_mode = None  # 当前框选动作的用途（None=非主流程发起）
-        self._pending_region = None
         self._window_picker: WindowPicker | None = None  # 选窗对话框（互斥用）
         self._stopping_watch = False  # 停线程时 processEvents 防重入
 
@@ -243,22 +260,78 @@ class App:
                 pass
 
     def _ensure_server(self) -> bool:
-        """确保翻译服务可用；若启动时预热尚未完成，会等待同一启动过程结束。"""
-        if self.server.is_healthy():
-            return True
-        self.log.info("翻译服务未就绪，开始启动/等待…")
-        self.tray.showMessage(_t("app_name"), _t("msg_wait_model"))
-        try:
-            # 与预热共用锁：不会重复拉起第二个 llama-server
-            self.server.start()
-            self.log.info("翻译服务已就绪")
-            return True
-        except Exception as e:
-            self.log.exception("翻译服务启动失败")
-            from .ui.topmost import topmost_message
-
-            topmost_message("critical", _t("msg_server_fail"), str(e))
+        """只做快速就绪检查；启动/重试始终在后台，绝不阻塞 UI。"""
+        if self._quitting:
             return False
+        if self.server.is_healthy(timeout=0.2):
+            return True
+        state = self._preload_status.get("llama", "pending")
+        if state == "fail" and not self._has_live_preload("llama-preload"):
+            self.log.info("翻译服务上次启动失败，后台重试")
+            self._preload_status["llama"] = "pending"
+            self._start_preload_thread("llama-preload", self._load_llama)
+        else:
+            self.log.info("翻译服务尚未就绪 state=%s", state)
+        self.tray.showMessage(_t("app_name"), _t("msg_wait_model"))
+        return False
+
+    def _has_live_preload(self, name: str) -> bool:
+        self._preload_threads = [t for t in self._preload_threads if t.is_alive()]
+        return any(t.name == name for t in self._preload_threads)
+
+    def _start_preload_thread(self, name: str, target) -> None:
+        if self._quitting or self._has_live_preload(name):
+            return
+        thread = threading.Thread(target=target, daemon=True, name=name)
+        self._preload_threads.append(thread)
+        thread.start()
+
+    def _on_preload_status(self, key: str, value: str, err: str):
+        """Qt 主线程槽：更新状态和托盘，避免后台线程直接碰 UI。"""
+        self._preload_status[key] = value
+        if value == "fail" and err:
+            name = _t("msg_name_llama") if key == "llama" else _t("msg_name_ocr")
+            self.log.error("预热失败 %s: %s", key, err)
+            if not self._quitting:
+                self.tray.showMessage(
+                    _t("msg_preload_fail", name=name),
+                    err[:200],
+                    QSystemTrayIcon.MessageIcon.Warning,
+                )
+            return
+        self.log.info("预热进度 %s=%s", key, value)
+        if all(self._preload_status.get(k) == "ok" for k in ("llama", "ocr")):
+            self.log.info("预热完成：OCR 与翻译模型均已就绪")
+
+    def _load_llama(self):
+        try:
+            self.log.info("预热：启动 llama-server…")
+            self.server.start()
+            try:
+                self.translator.translate("ok", "简体中文")
+                self.log.info("预热：翻译空转成功")
+            except Exception as e:
+                self.log.warning("预热：翻译空转失败（不阻断）: %s", e)
+            self._preload_signals.status.emit("llama", "ok", "")
+        except Exception as e:
+            self._preload_signals.status.emit("llama", "fail", str(e))
+
+    def _load_ocr(self):
+        try:
+            self.log.info("预热：加载 PaddleOCR…")
+            self.ocr.preload()
+            import numpy as np
+
+            dummy = np.full((120, 320, 3), 255, dtype=np.uint8)
+            dummy[40:50, 20:300] = 30
+            try:
+                self.ocr.recognize(dummy)
+                self.log.info("预热：OCR 空转成功")
+            except Exception as e:
+                self.log.warning("预热：OCR 空转失败（不阻断）: %s", e)
+            self._preload_signals.status.emit("ocr", "ok", "")
+        except Exception as e:
+            self._preload_signals.status.emit("ocr", "fail", str(e))
 
     def _preload_models(self):
         """启动时并行预热：llama 翻译服务 + PaddleOCR + 一次空转推理。
@@ -267,78 +340,32 @@ class App:
         1) 翻译模型还在加载 / 首次 GPU 推理未热身
         2) OCR（Paddle）默认懒加载，第一次截屏/划词才初始化，往往更慢
         """
-        import threading
-
         if getattr(self, "_preload_started", False):
             return
         self._preload_started = True
-        self._preload_status = {"llama": "pending", "ocr": "pending"}
-        # 启动气泡只在 exec() 弹一次；这里只在「全部就绪」或「失败」时再提示
-
-        def _notify_if_ready():
-            st = self._preload_status
-            if st["llama"] == "ok" and st["ocr"] == "ok":
-                # 仅写日志，不弹托盘气泡
-                self.log.info("预热完成：OCR 与翻译模型均已就绪")
-
-        def _set(key: str, value: str, err: str | None = None):
-            self._preload_status[key] = value
-            if value == "fail" and err:
-                name = _t("msg_name_llama") if key == "llama" else _t("msg_name_ocr")
-                self.log.error("预热失败 %s: %s", key, err)
-                QTimer.singleShot(
-                    0,
-                    lambda n=name, e=err: self.tray.showMessage(
-                        _t("msg_preload_fail", name=n),
-                        e[:200],
-                        QSystemTrayIcon.MessageIcon.Warning,
-                    ),
-                )
-            else:
-                self.log.info("预热进度 %s=%s", key, value)
-                QTimer.singleShot(0, _notify_if_ready)
-
-        def _load_llama():
-            try:
-                self.log.info("预热：启动 llama-server…")
-                self.server.start()
-                # /health 就绪后仍做一次极短推理，预热 GPU/CUDA 与首 token 路径
-                try:
-                    self.translator.translate("ok", "简体中文")
-                    self.log.info("预热：翻译空转成功")
-                except Exception as e:
-                    self.log.warning("预热：翻译空转失败（不阻断）: %s", e)
-                _set("llama", "ok")
-            except Exception as e:
-                _set("llama", "fail", str(e))
-
-        def _load_ocr():
-            try:
-                self.log.info("预热：加载 PaddleOCR…")
-                self.ocr.preload()
-                # 用带简单笔画的样例图跑通 predict，更接近真实屏幕
-                import numpy as np
-
-                dummy = np.full((120, 320, 3), 255, dtype=np.uint8)
-                dummy[40:50, 20:300] = 30  # 一条深色横线当「文字」
-                try:
-                    self.ocr.recognize(dummy)
-                    self.log.info("预热：OCR 空转成功")
-                except Exception as e:
-                    self.log.warning("预热：OCR 空转失败（不阻断）: %s", e)
-                _set("ocr", "ok")
-            except Exception as e:
-                _set("ocr", "fail", str(e))
-
+        self._preload_status.update(llama="pending", ocr="pending")
         self.log.info("开始后台预热 OCR + 翻译模型")
-        threading.Thread(target=_load_llama, daemon=True, name="llama-preload").start()
-        threading.Thread(target=_load_ocr, daemon=True, name="ocr-preload").start()
+        self._start_preload_thread("llama-preload", self._load_llama)
+        self._start_preload_thread("ocr-preload", self._load_ocr)
 
     # ---------- 截屏 / 静默取字 ----------
     def _start_select(self, mode: str):
+        if self._quitting:
+            return
+        if self._pending_mode is not None or self.selector.isVisible():
+            self.log.info("已有框选操作，忽略重复触发 mode=%s", mode)
+            return
+        if mode == "screenshot" and not self._ensure_server():
+            return
+        capture.configure_qt_screens(self.qapp.screens())
         self.log.info("开始框选 mode=%s", mode)
         self._pending_mode = mode
-        self.selector.start()
+        try:
+            self.selector.start()
+        except Exception as e:
+            self._pending_mode = None
+            self.log.exception("启动框选失败 mode=%s", mode)
+            self._show_error(str(e))
 
     def _on_region(self, x: int, y: int, w: int, h: int):
         if self._pending_mode is None:
@@ -347,7 +374,7 @@ class App:
         if mode == "region_watch":
             self._start_region_watch(x, y, w, h)
             return
-        self._pending_region = (x, y, w, h)
+        region = (x, y, w, h)
         # 优先用框选时已截好的静态底图裁切（无二次截屏、减轻闪一下）
         img = self.selector.take_crop()
         if img is None:
@@ -361,18 +388,28 @@ class App:
             target_language=self.translate_win.target_language,
         )
         if mode == "screenshot":
-            worker.finished_ok.connect(self._show_screenshot_result)
+            worker.finished_ok.connect(
+                lambda source, translation, r=region:
+                    self._show_screenshot_result(r, source, translation)
+            )
         else:
             worker.finished_ok.connect(self._finish_silent_ocr)
         worker.failed.connect(self._show_error)
         self._run_worker(worker)
 
-    def _show_screenshot_result(self, source: str, translation: str):
-        x, y, w, h = self._pending_region
-        self.storage.add_history(source, translation, "screenshot")
+    def _show_screenshot_result(
+        self, region: tuple[int, int, int, int], source: str, translation: str
+    ):
+        if self._quitting:
+            return
+        x, y, w, h = region
+        if self.cfg.get("history_enabled", True):
+            self.storage.add_history(source, translation, "screenshot")
         self.translate_win.show_result(source, translation, x, y + h + 8)
 
     def _finish_silent_ocr(self, source: str, _translation: str):
+        if self._quitting:
+            return
         QApplication.clipboard().setText(source)
         self.tray.showMessage(
             _t("msg_ocr_title"), _t("msg_ocr_copied", text=source[:120])
@@ -380,20 +417,24 @@ class App:
 
     # ---------- 划词翻译 ----------
     def _word_translate(self):
-        """划词：多路复制（终端常需 Ctrl+Shift+C）→ 剪贴板 → 失败则 OCR。
+        """划词：多路复制（终端常需 Ctrl+Shift+C）→ 剪贴板 → 失败则提示。
 
         终端/部分应用问题：
         - Ctrl+C 是中断不是复制
         - 仅 Ctrl+Shift+C 或「选中即复制」有效
         - 焦点控件需 WM_COPY
         """
+        if self._quitting or self._word_copy_busy:
+            self.log.info("划词复制尚未结束，忽略重复触发")
+            return
         if not self._ensure_server():
             return
         import time as _time
 
         from . import selection as sel
 
-        self._word_old_clip = QApplication.clipboard().text()
+        self._word_copy_busy = True
+        self._word_old_mime = _clone_mime_data(QApplication.clipboard().mimeData())
         # 唯一标记：只有剪贴板变成「非标记」才算复制成功
         self._word_marker = f"\u200bST{_time.time_ns()}\u200b"
         QApplication.clipboard().setText(self._word_marker)
@@ -417,12 +458,16 @@ class App:
         self.log.info("划词复制阶段 %s", kind)
         # 每阶段重新写入标记，避免上一阶段残留误判
         marker = getattr(self, "_word_marker", "")
-        if marker:
-            QApplication.clipboard().setText(marker)
-        if kind == "wm_copy":
-            sel.try_wm_copy()
-        else:
-            sel.send_copy_shortcut(kind)
+        try:
+            if marker:
+                QApplication.clipboard().setText(marker)
+            if kind == "wm_copy":
+                sel.try_wm_copy()
+            else:
+                sel.send_copy_shortcut(kind)
+        except Exception as e:
+            # 当前方式失败仍让轮询继续，超时后会自动尝试下一种复制方式。
+            self.log.warning("划词复制阶段失败 kind=%s: %s", kind, e)
 
     def _word_clipboard_text(self) -> str:
         """读取剪贴板；若仍是标记或空则返回空串。"""
@@ -436,6 +481,8 @@ class App:
 
     def _word_poll_clipboard(self, attempts: int):
         """高频轮询；本阶段失败则进入下一复制方式。"""
+        if not self._word_copy_busy or self._quitting:
+            return
         text = self._word_clipboard_text()
         if text:
             self._word_finish_with_text(text)
@@ -458,14 +505,11 @@ class App:
 
     def _word_finish_with_text(self, text: str):
         """有选中文本则译；拿不到则提示（仅划词复制，不做附近 OCR）。"""
-        old = getattr(self, "_word_old_clip", "") or ""
         pos = QCursor.pos()
-        # 立刻还原用户剪贴板
-        try:
-            QApplication.clipboard().setText(old)
-        except Exception:
-            pass
+        self._restore_word_clipboard()
 
+        if self._quitting:
+            return
         if not text:
             self.tray.showMessage(_t("msg_word_title"), _t("msg_word_empty"))
             return
@@ -480,8 +524,22 @@ class App:
         worker.failed.connect(self._show_error)
         self._run_worker(worker)
 
+    def _restore_word_clipboard(self):
+        """恢复划词前的全部剪贴板格式，并使旧轮询立即失效。"""
+        old = self._word_old_mime
+        self._word_old_mime = None
+        self._word_copy_busy = False
+        try:
+            if old is not None:
+                QApplication.clipboard().setMimeData(old)
+        except Exception:
+            pass
+
     def _show_word_result(self, x: int, y: int, source: str, translation: str):
-        self.storage.add_history(source, translation, "word")
+        if self._quitting:
+            return
+        if self.cfg.get("history_enabled", True):
+            self.storage.add_history(source, translation, "word")
         self.translate_win.show_result(source, translation, x + 12, y + 16)
 
     # ---------- 窗口 / 区域持续翻译 ----------
@@ -548,10 +606,15 @@ class App:
             self._window_picker = None
 
     def _on_region_cancelled(self):
-        """框选 Esc / 无效框 / 程序 cancel：清掉持续翻译选区状态。"""
-        if self._pending_mode == "region_watch":
+        """框选 Esc / 无效框 / 程序 cancel：清掉本次框选状态。"""
+        mode = self._pending_mode
+        if mode is None:
+            return
+        self._pending_mode = None
+        if mode == "region_watch":
             self.log.info("区域持续翻译：框选已取消")
-            self._pending_mode = None
+        else:
+            self.log.info("框选已取消 mode=%s", mode)
 
     def _hide_watch_ui(self):
         """立刻藏起所有持续翻译浮层（不等线程结束）。"""
@@ -613,10 +676,23 @@ class App:
             except (TypeError, RuntimeError):
                 pass
 
-    def _join_watcher(self, w, *, label: str = "监视线程") -> None:
+    def _retain_watcher(self, w: WindowWatcher) -> None:
+        """保留尚未退出的 QThread，避免局部引用释放时被销毁。"""
+        if w in self._retired_watchers:
+            return
+        self._retired_watchers.append(w)
+        w.finished.connect(lambda w=w: self._drop_retired_watcher(w))
+
+    def _drop_retired_watcher(self, w: WindowWatcher) -> None:
+        try:
+            self._retired_watchers.remove(w)
+        except ValueError:
+            pass
+
+    def _join_watcher(self, w, *, label: str = "监视线程") -> bool:
         """请求停止并短暂等待；尽量少进事件循环，避免停线程时重入开新会话。"""
         if w is None:
-            return
+            return True
         self._disconnect_watcher(w)
         w.stop()
         was = self._stopping_watch
@@ -624,7 +700,7 @@ class App:
         try:
             # 先纯等待，不处理用户输入事件
             if w.wait(1500):
-                return
+                return True
             # 仍在跑：少量 processEvents（排除用户输入）保 UI 不假死
             for _ in range(10):
                 if not w.isRunning():
@@ -636,6 +712,9 @@ class App:
                     break
             if w.isRunning():
                 self.log.warning("%s仍在运行（可能卡在翻译请求），UI 已关闭", label)
+                self._retain_watcher(w)
+                return False
+            return True
         finally:
             self._stopping_watch = was
 
@@ -662,6 +741,8 @@ class App:
         # 不弹托盘气泡，写日志即可
 
     def _toggle_window_watch(self):
+        if self._quitting:
+            return
         # 停止流程中（等旧线程）不再开新会话，避免叠两个
         if self._stopping_watch:
             self._stop_continuous_translate("已停止窗口持续翻译")
@@ -672,6 +753,7 @@ class App:
             return
         if not self._ensure_server():
             return
+        capture.configure_qt_screens(self.qapp.screens())
         picker = WindowPicker()
         self._window_picker = picker
         try:
@@ -697,6 +779,8 @@ class App:
 
     def _toggle_region_watch(self):
         """框选屏幕区域持续翻译（显示/间隔在设置里单独配置）。"""
+        if self._quitting:
+            return
         if self._stopping_watch:
             self._stop_continuous_translate("已停止区域持续翻译")
             return
@@ -734,7 +818,9 @@ class App:
         self._watcher = None
         if old is not None:
             self.log.info("启动前停止旧监视线程 profile=%s", self._watch_profile)
-            self._join_watcher(old, label="旧监视线程")
+            if not self._join_watcher(old, label="旧监视线程"):
+                self.log.warning("旧监视线程尚未退出，本次启动已取消")
+                return
         if self._stopping_watch:
             return
         # 只取消区域持续翻译的框选，不动截屏/取字
@@ -807,10 +893,12 @@ class App:
 
     def _on_watch_history(self, source: str, translation: str, mode: str):
         """持续翻译有实质新译文时写入历史。"""
+        if not self.cfg.get("history_enabled", True) or self._quitting:
+            return
         try:
             self.storage.add_history(source, translation, mode)
         except Exception:
-            pass
+            self.log.exception("持续翻译历史写入失败")
 
     def _apply_watch_display(self, annotate: bool, rect, *, announce: bool = False):
         """备注：贴原文旁（窗口/区域同）；字幕条：目标外侧，不遮挡。"""
@@ -992,6 +1080,9 @@ class App:
                 self._switch_watch_display(annotate)
 
     def _run_worker(self, worker: OcrTranslateWorker):
+        if self._quitting:
+            worker.requestInterruption()
+            return
         self._workers.append(worker)
 
         def _drop(_w=worker):
@@ -1004,6 +1095,8 @@ class App:
         worker.start()
 
     def _show_error(self, msg: str):
+        if self._quitting:
+            return
         # 完整报错写 app.log，托盘只显示摘要
         self.log.error("任务失败:\n%s", msg)
         self.tray.showMessage(
@@ -1032,10 +1125,48 @@ class App:
             )
 
     def _quit(self):
+        if self._quitting:
+            return
+        self._quitting = True
         self.log.info("退出程序")
+        self._restore_word_clipboard()
         self._stop_continuous_translate("程序退出")
         self.hotkeys.stop()
-        self.server.stop()
+        self.tray.hide()
+        for worker in list(self._workers):
+            worker.requestInterruption()
+        input_worker = self.translate_win.active_worker()
+        if input_worker is not None:
+            input_worker.requestInterruption()
+        # 在后台停服务：若 start() 正持锁，主线程仍能继续处理退出事件。
+        self._shutdown_server_thread = threading.Thread(
+            target=self.server.stop,
+            daemon=True,
+            name="llama-stop",
+        )
+        self._shutdown_server_thread.start()
+        QTimer.singleShot(50, self._poll_shutdown)
+
+    def _poll_shutdown(self):
+        """等待所有会触碰 OCR/Translator/UI/Storage 的任务自然收尾。"""
+        self._workers = [w for w in self._workers if w.isRunning()]
+        self._retired_watchers = [w for w in self._retired_watchers if w.isRunning()]
+        self._preload_threads = [t for t in self._preload_threads if t.is_alive()]
+        input_worker = self.translate_win.active_worker()
+        stopping_server = (
+            self._shutdown_server_thread is not None
+            and self._shutdown_server_thread.is_alive()
+        )
+        if (
+            self._workers
+            or self._retired_watchers
+            or self._preload_threads
+            or input_worker is not None
+            or stopping_server
+        ):
+            QTimer.singleShot(100, self._poll_shutdown)
+            return
+        self.translator.close()
         self.storage.close()
         self.qapp.quit()
 
@@ -1129,6 +1260,11 @@ def _install_exception_hooks() -> None:
 
 def main():
     _install_exception_hooks()
+    # Qt 要求在创建 QApplication 前设置；否则混合缩放策略不会稳定生效。
+    if QApplication.instance() is None:
+        QApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
     qapp = QApplication.instance() or QApplication(sys.argv)
     if _acquire_single_instance(qapp) is None:
         return 1

@@ -29,6 +29,8 @@ class OcrEngine:
         self._cfg = cfg
         self._ocr = None
         self._lock = threading.Lock()
+        # Paddle 推理对象不在多个 Qt/Python 工作线程之间并发使用。
+        self._predict_lock = threading.Lock()
 
     def preload(self) -> None:
         """后台预热：导入 PaddleOCR 并初始化模型。"""
@@ -96,7 +98,8 @@ class OcrEngine:
         self._ensure_loaded()
         work, inv = self._prepare_image(image)
         score_min = float(self._cfg.get("ocr_score_min") or 0.0)
-        results = self._ocr.predict(work)
+        with self._predict_lock:
+            results = self._ocr.predict(work)
         lines: list[OcrLine] = []
         for res in results:
             texts = res.get("rec_texts", [])

@@ -25,7 +25,10 @@ OCR = PaddleOCR · Translation = local llama-server + HY-MT1.5.
 
 **Code → Download ZIP**, or `git clone` this repo.
 
-### 2. Get models (~2GB)
+### 2. Get translation model + llama (~2GB)
+
+OCR models (`runtime\paddlex\`) ship with the source.  
+Translation model and llama-server still need a separate download:
 
 **Releases** → download **`runtime-*.zip`** → extract into the **project root** (same folder as `run.py`).
 
@@ -36,10 +39,10 @@ ScreenTranslator\
   run.py
   runtime\models\*.gguf
   runtime\llama\llama-server.exe
-  runtime\paddlex\...
+  runtime\paddlex\official_models\...
 ```
 
-> Source code ZIP has **no models**. Always get the Release runtime package too.
+> Source code ZIP has **no translation model / llama**. Get the Release runtime package (or prepare manually per [runtime/README.en.md](./runtime/README.en.md)).
 
 Fallback: [runtime/README.en.md](./runtime/README.en.md) or `.\setup.ps1 -DownloadRuntime`.
 
@@ -90,7 +93,6 @@ Log: `app.log`.
 
 ## Other
 
-- Optional llama GUI: `启动llama.bat`  
 - Model licenses: [NOTICE](./NOTICE)  
 
 **Setup docs may be AI-generated; verify paths and Release names yourself.**

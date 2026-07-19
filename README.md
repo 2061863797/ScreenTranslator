@@ -25,7 +25,10 @@ English: [README.en.md](./README.en.md)
 
 GitHub → **Code → Download ZIP** 并解压，或 `git clone` 本仓库。
 
-### 2. 下载模型等（约 2GB）
+### 2. 下载翻译模型与 llama（约 2GB）
+
+OCR 模型（`runtime\paddlex\`）已随源码提供。  
+翻译模型与 llama-server 仍需单独下载：
 
 GitHub → **Releases** → 下载 **`runtime-*.zip`** → **解压到源码根目录**（与 `run.py` 同级）。
 
@@ -36,10 +39,10 @@ ScreenTranslator\
   run.py
   runtime\models\*.gguf
   runtime\llama\llama-server.exe
-  runtime\paddlex\...
+  runtime\paddlex\official_models\...
 ```
 
-> 只下「Source code」zip **没有模型**。必须再下 Releases 里的 runtime 包。
+> 只下「Source code」zip **没有翻译模型 / llama**。必须再下 Releases 里的 runtime 包（或按 [runtime/README.md](./runtime/README.md) 手动准备）。
 
 没有 Release 时：见 [runtime/README.md](./runtime/README.md)，或项目根执行 `.\setup.ps1 -DownloadRuntime`。
 
@@ -95,7 +98,6 @@ venv\Scripts\pythonw.exe run.py
 
 ## 其它
 
-- llama 单独调参：`启动llama.bat`（[说明](./LLAMA启动器说明.md)）  
 - 模型等第三方许可见 [NOTICE](./NOTICE)  
 
 **本安装说明可能由 AI 生成，请自行核对路径与 Release 文件名后再操作。**

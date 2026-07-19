@@ -1,13 +1,16 @@
 # runtime
 
-Model + llama + OCR (~2GB).
+Translation model + llama-server (~2GB) + OCR models.
 
-## Get files
+- **OCR (`paddlex/official_models`)**: included in the source repo.  
+- **Translation model / llama**: still from Releases or the URLs below.
+
+## Get files (model + llama)
 
 1. Repo **Releases** → **`runtime-*.zip`**  
 2. Extract to **project root** (next to `run.py`)  
 
-Expect: `runtime\models\*.gguf`, `runtime\llama\llama-server.exe`, `runtime\paddlex\`.
+Expect: `runtime\models\*.gguf`, `runtime\llama\llama-server.exe`; OCR at `runtime\paddlex\official_models\` (ships with source).
 
 Fallback: `.\setup.ps1 -DownloadRuntime`, or:
 

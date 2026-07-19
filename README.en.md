@@ -138,6 +138,29 @@ To install Python first:
 winget install Python.Python.3.12
 ```
 
+## Screenshots
+
+| Screenshot translation | Select a live-translation window |
+|:----------------------:|:--------------------------------:|
+| ![Screenshot translation result](./docs/images/screenshot-translation-result.png) | ![Live-translation window picker](./docs/images/window-picker.png) |
+
+| Live-translation subtitle overlay | Inline annotation mode |
+|:---------------------------------:|:----------------------:|
+| ![Live-translation subtitle overlay](./docs/images/live-translation-overlay.png) | ![Inline annotation mode](./docs/images/inline-annotation-mode.png) |
+
+Font size can be configured separately under Settings → General / Window translation / Region translation. “Default” preserves the app's original font sizes, and changes take effect immediately after saving.
+
+## Switch translation models
+
+The app does not download additional models automatically. To switch models:
+
+1. Download a translation `.gguf` compatible with `llama.cpp` yourself.
+2. Put the model file directly in `runtime\models\`; do not add another folder level.
+3. Open Tray → Settings → Advanced → Model & generation, select the model, and save.
+4. Exit and restart the app before the new model takes effect.
+
+The model directory is rescanned whenever Settings opens. Only `.gguf` files with a valid file header are listed. Translation suitability, prompt compatibility, and memory requirements depend on the selected model.
+
 ## Default hotkeys
 
 | Action | Key |

@@ -187,7 +187,31 @@ function Test-Runtime {
     Write-Step "检查 runtime 资源"
     $ok = $true
     $llama = Join-Path $Root "runtime\llama\llama-server.exe"
-    $model = Join-Path $Root "runtime\models\HY-MT1.5-1.8B-Q4_K_M.gguf"
+    $defaultModel = Join-Path $Root "runtime\models\HY-MT1.5-1.8B-Q4_K_M.gguf"
+    $model = $defaultModel
+    $configFile = Join-Path $Root "config.json"
+    if (Test-Path -LiteralPath $configFile) {
+        try {
+            # Windows PowerShell 5.1 对无 BOM UTF-8 的默认解码不可靠，必须显式指定。
+            $configData = Get-Content -LiteralPath $configFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            $configuredModel = $configData.model_path
+            if ($configuredModel -is [string] -and -not [string]::IsNullOrWhiteSpace($configuredModel)) {
+                if ([System.IO.Path]::IsPathRooted($configuredModel)) {
+                    $model = [System.IO.Path]::GetFullPath($configuredModel)
+                } else {
+                    $model = [System.IO.Path]::GetFullPath((Join-Path $Root $configuredModel))
+                }
+            }
+        } catch {
+            Write-Warn2 "config.json 的 model_path 无法读取，改为检查默认模型"
+            $model = $defaultModel
+        }
+    }
+    $isDefaultModel = [string]::Equals(
+        [System.IO.Path]::GetFullPath($model),
+        [System.IO.Path]::GetFullPath($defaultModel),
+        [System.StringComparison]::OrdinalIgnoreCase
+    )
     $ocr = Join-Path $Root "runtime\paddlex\official_models"
 
     if (Test-Path -LiteralPath $llama) {
@@ -215,7 +239,10 @@ function Test-Runtime {
             [void]$fs.Read($magicBytes, 0, 4)
             $magic = [System.Text.Encoding]::ASCII.GetString($magicBytes)
         } finally { $fs.Dispose() }
-        if ($magic -eq "GGUF" -and $mb -gt 100) {
+        if ($magic -ne "GGUF" -or $mb -le 0) {
+            Write-Err2 "翻译模型文件不完整或不是 GGUF: $model"
+            $ok = $false
+        } elseif ($isDefaultModel -and $mb -gt 100) {
             $expectedModelSha = "4383ac0c3c8e476de98ff979c2a3f069f8c4fb385e7860cf2d28da896cc477c7"
             $actualModelSha = (Get-FileHash -LiteralPath $model -Algorithm SHA256).Hash.ToLowerInvariant()
             if ($actualModelSha -eq $expectedModelSha) {
@@ -224,9 +251,11 @@ function Test-Runtime {
                 Write-Err2 "翻译模型 SHA256 不匹配: $model"
                 $ok = $false
             }
-        } else {
-            Write-Err2 "翻译模型文件不完整或不是 GGUF: $model"
+        } elseif ($isDefaultModel) {
+            Write-Err2 "默认翻译模型文件不完整: $model"
             $ok = $false
+        } else {
+            Write-Ok "自定义翻译模型: $model ($mb MB，GGUF 文件头正确)"
         }
     } else {
         Write-Err2 "缺少 $model"

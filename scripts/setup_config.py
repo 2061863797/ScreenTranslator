@@ -79,7 +79,9 @@ def main() -> int:
 
     # setup 职责：便携路径 + 本机算力参数
     cfg["llama_dir"] = "runtime/llama"
-    cfg["model_path"] = "runtime/models/HY-MT1.5-1.8B-Q4_K_M.gguf"
+    # 保留设置页选择的模型；首次安装或无效配置仍使用默认模型。
+    if not isinstance(cfg.get("model_path"), str) or not cfg["model_path"].strip():
+        cfg["model_path"] = "runtime/models/HY-MT1.5-1.8B-Q4_K_M.gguf"
     cfg["n_gpu_layers"] = ngl
     cfg["threads"] = threads
 

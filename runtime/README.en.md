@@ -32,6 +32,12 @@ Check the assets with:
 .\setup.ps1 -Check
 ```
 
+## Multiple translation models
+
+`runtime\models\` may contain multiple `.gguf` files. Download additional models yourself and place them directly in this folder. Then choose one under Tray → Settings → Advanced → Model & generation, save, and restart the app.
+
+The settings list accepts only files with a valid GGUF header. A custom model must still be compatible with the bundled `llama.cpp`; verify its translation behavior, prompt format, license, and hardware requirements yourself.
+
 ## CPU setup or missing Release assets
 
 Without an NVIDIA GPU, download and use the CPU llama build:

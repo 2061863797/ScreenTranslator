@@ -32,6 +32,12 @@ runtime\paddlex\official_models\PP-OCRv6_medium_rec\
 .\setup.ps1 -Check
 ```
 
+## 放置多个翻译模型
+
+`runtime\models\` 可以同时放置多个 `.gguf` 文件。额外模型需要自行下载，并直接放在该目录顶层；随后在“托盘 → 设置 → 高级 → 模型与生成”中选择，保存并重启软件后生效。
+
+设置列表只识别文件头有效的 GGUF。自定义模型仍需兼容当前 `llama.cpp`，并自行确认翻译能力、提示格式、许可和硬件需求。
+
 ## CPU 或缺少 Release 附件
 
 没有 NVIDIA 显卡时，使用 CPU 版 llama：

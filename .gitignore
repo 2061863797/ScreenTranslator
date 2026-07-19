@@ -20,6 +20,7 @@ data.db
 app.log
 error.log
 *.log
+*.log.*
 
 # —— 打包产物 ——
 build/

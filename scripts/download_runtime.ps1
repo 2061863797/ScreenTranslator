@@ -141,9 +141,9 @@ if (-not $SkipModel) {
             throw
         }
     }
-    # 若量化不是默认 Q4，提示改 config
+    # 若量化不是默认 Q4，提示在设置中选择刚下载的模型
     if ($Quant -ne "Q4_K_M") {
-        Write-Warn2 "当前量化 $Quant，请在 config.json 中把 model_path 设为 runtime/models/$name"
+        Write-Warn2 "当前量化 $Quant，请在『设置 → 高级 → 模型与生成』中选择 $name，保存后重启软件"
     }
 } else {
     Write-Warn2 "跳过模型下载 (-SkipModel)"

@@ -670,6 +670,7 @@ class App:
             w.annotations_ready,
             w.history_ready,
             w.window_moved,
+            w.content_cleared,
         ):
             try:
                 sig.disconnect()
@@ -857,6 +858,7 @@ class App:
             # 窗口翻译：字幕/备注与被译窗口同层，不压在其它应用上
             self._set_watch_layer_owner(hwnd)
         # 备注=贴原文旁（窗口/区域相同）；字幕条=外侧，不盖住目标
+        self._apply_watch_font_size(profile)
         self._apply_watch_display(annotate, rect, announce=True)
         # 显示后再绑一次（setWindowFlags / 首次 show 会重建 HWND）
         if hwnd is not None:
@@ -868,9 +870,10 @@ class App:
             profile=profile,
         )
         self._watcher.subtitle_ready.connect(self.subtitle.set_text)
-        self._watcher.annotations_ready.connect(self.annotation.set_items)
+        self._watcher.annotations_ready.connect(self._on_watch_annotations)
         self._watcher.history_ready.connect(self._on_watch_history)
         self._watcher.window_moved.connect(self._on_target_window_moved)
+        self._watcher.content_cleared.connect(self._on_watch_content_cleared)
         self._watcher.stopped.connect(self._on_watch_stopped)
         self._watcher.start()
 
@@ -883,13 +886,43 @@ class App:
         self._watch_rect = rect
         if self._watcher and self._watcher.isRunning():
             self._watcher.set_region(rect)
+        if self._watch_annotate is True:
+            # 移动/缩放后旧译文坐标已失效；先清空，确保下一帧是干净底图。
+            self.annotation.set_items([])
         self.annotation.update_geometry(rect)
+        self._sync_annotation_mask()
         # 跟随模式才重贴；自由/固定保持用户拖好的字幕位置
         if self.subtitle.mode == "follow":
             self.subtitle.attach_below(rect, outside=True)
         if self.annotate_ctrl.isVisible():
             self.annotate_ctrl.place_above(rect)
         self.log.info("区域识别框更新 %s", rect)
+
+    def _on_watch_annotations(self, items: list) -> None:
+        """主线程绘制备注，并把精确像素遮罩同步给下一轮 OCR。"""
+        if not self._watcher or self._watch_annotate is not True:
+            return
+        self.annotation.set_items(items)
+        self._sync_annotation_mask()
+
+    def _sync_annotation_mask(self) -> None:
+        watcher = self._watcher
+        if watcher is None:
+            return
+        mask = None
+        if self._watch_region is not None and self._watch_annotate is True:
+            mask = self.annotation.capture_mask()
+        watcher.set_annotation_mask(mask)
+
+    def _on_watch_content_cleared(self) -> None:
+        """源文字连续消失时同步清空译文，不保留上一条过期内容。"""
+        if not self._watcher:
+            return
+        if self._watch_annotate is True:
+            self.annotation.set_items([])
+            self._sync_annotation_mask()
+        else:
+            self.subtitle.set_text("")
 
     def _on_watch_history(self, source: str, translation: str, mode: str):
         """持续翻译有实质新译文时写入历史。"""
@@ -899,6 +932,18 @@ class App:
             self.storage.add_history(source, translation, mode)
         except Exception:
             self.log.exception("持续翻译历史写入失败")
+
+    def _apply_watch_font_size(self, profile: str | None = None) -> None:
+        """把当前窗口或区域翻译的独立字号应用到两种显示模式。"""
+        profile = profile or self._watch_profile
+        if profile not in ("window", "region"):
+            return
+        try:
+            size = int(self.cfg.get(f"{profile}_watch_font_size", 0))
+        except (TypeError, ValueError):
+            size = 0
+        self.subtitle.set_font_size(size)
+        self.annotation.set_font_size(size)
 
     def _apply_watch_display(self, annotate: bool, rect, *, announce: bool = False):
         """备注：贴原文旁（窗口/区域同）；字幕条：目标外侧，不遮挡。"""
@@ -972,6 +1017,7 @@ class App:
             self.log.info("已切换为备注模式 profile=%s", profile)
         else:
             self.log.info("已切换为字幕条模式 profile=%s", profile)
+        self._sync_annotation_mask()
 
     def _annotate_skip_cfg_key(self) -> str:
         """当前会话对应的「跳过目标语」配置键。
@@ -1055,6 +1101,7 @@ class App:
             )
         self.apply_ui_language()
         self.translate_win.sync_language_from_cfg()
+        self.translate_win.sync_font_size_from_cfg()
         # 备注译文颜色
         try:
             self.annotation.set_text_color(
@@ -1073,6 +1120,8 @@ class App:
             and self._watch_rect
             and self._watch_profile
         ):
+            self._apply_watch_font_size(self._watch_profile)
+            self._sync_annotation_mask()
             key = f"{self._watch_profile}_watch_annotate"
             annotate = bool(self.cfg.get(key))
             cur = self._watch_annotate

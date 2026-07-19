@@ -11,6 +11,7 @@ from PySide6.QtCore import QCoreApplication, QMimeData
 from app import capture
 from app.llama_server import LlamaServer
 from app.main import App, _PreloadSignals, _clone_mime_data
+from app.window_watcher import WindowWatcher
 
 
 class _FakeProcess:
@@ -98,6 +99,95 @@ class RuntimeSafetyTests(unittest.TestCase):
             self.assertTrue(np.all(image[:, 50:, 0] == 20))
         finally:
             capture._SCREEN_LAYOUT[:] = old
+
+    def test_region_annotation_mask_restores_previous_clean_pixels(self):
+        watcher = WindowWatcher(
+            Mock(),
+            Mock(),
+            {},
+            region=(10, 20, 30, 40),
+            profile="region",
+            display_mode="annotate",
+        )
+        clean = np.full((40, 30, 3), 20, dtype=np.uint8)
+        watcher._remove_annotation_overlay(clean)
+
+        mask = np.zeros((40, 30), dtype=np.uint8)
+        mask[15:20, 10:15] = 255
+        watcher.set_annotation_mask(mask)
+        captured = clean.copy()
+        captured[13:22, 8:17] = 240
+        captured[0, 0] = 99
+
+        restored = watcher._remove_annotation_overlay(captured)
+        self.assertTrue(np.all(restored[13:22, 8:17] == 20))
+        self.assertTrue(np.all(restored[0, 0] == 99))
+
+    def test_continuous_ocr_clears_stale_text_after_two_empty_frames(self):
+        watcher = WindowWatcher(
+            Mock(), Mock(), {}, hwnd=404, profile="window"
+        )
+        watcher._last_text = "previous subtitle"
+        cleared = Mock()
+        watcher.content_cleared.connect(cleared)
+
+        watcher._observe_empty_ocr_frame()
+        cleared.assert_not_called()
+        self.assertEqual(watcher._last_text, "previous subtitle")
+
+        watcher._observe_empty_ocr_frame()
+        cleared.assert_called_once_with()
+        self.assertEqual(watcher._last_text, "")
+
+        watcher._observe_empty_ocr_frame()
+        cleared.assert_called_once_with()
+
+    def test_identical_frames_are_still_checked_by_continuous_ocr(self):
+        ocr = Mock()
+        watcher = WindowWatcher(
+            ocr,
+            Mock(),
+            {
+                "window_watch_interval_ms": 20,
+                "window_watch_diff_threshold": 0.8,
+                "window_annotate_skip_target_lang": False,
+                "target_language": "简体中文",
+            },
+            hwnd=404,
+            profile="window",
+        )
+        image = np.zeros((20, 30, 3), dtype=np.uint8)
+        watcher._grab = Mock(return_value=((0, 0, 30, 20), image))
+        calls = 0
+
+        def _recognize(_image):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                watcher._running = False
+            return []
+
+        ocr.recognize.side_effect = _recognize
+        watcher.run()
+
+        self.assertEqual(ocr.recognize.call_count, 2)
+
+    def test_annotation_mask_sync_is_limited_to_active_region_notes(self):
+        app = App.__new__(App)
+        app._watcher = Mock()
+        app.annotation = Mock()
+        mask = np.ones((20, 30), dtype=np.uint8)
+        app.annotation.capture_mask.return_value = mask
+        app._watch_region = (0, 0, 300, 200)
+        app._watch_annotate = True
+
+        app._sync_annotation_mask()
+        app._watcher.set_annotation_mask.assert_called_once_with(mask)
+
+        app._watcher.set_annotation_mask.reset_mock()
+        app._watch_annotate = False
+        app._sync_annotation_mask()
+        app._watcher.set_annotation_mask.assert_called_once_with(None)
 
     def test_clipboard_mime_clone_preserves_all_formats(self):
         source = QMimeData()

@@ -2,7 +2,7 @@
 """功能窗口：设置、翻译历史、统一翻译窗口（输入/划词/截屏共用）。"""
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QColor, QGuiApplication
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QIntValidator
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -30,6 +30,13 @@ from PySide6.QtWidgets import (
 
 from .. import config
 from ..applog import LOG_PATH, get_log_emitter, recent_lines
+from ..paths import (
+    RUNTIME_MODELS,
+    available_translation_models,
+    is_gguf_model,
+    resolve_path,
+    to_portable_path,
+)
 from .overlays import _DraggableMixin
 from .theme import (
     CornerSizeGrip,
@@ -242,6 +249,36 @@ def _form_row(label: str, widget: QWidget):
     return row, lab
 
 
+def _font_size_combo() -> QComboBox:
+    """默认值保留旧字号；其余选项为明确的像素字号。"""
+    combo = QComboBox()
+    combo.addItem("", 0)
+    for size in range(8, 49):
+        combo.addItem(f"{size} px", size)
+    return combo
+
+
+def _max_tokens_combo() -> QComboBox:
+    """常用值可直接选，同时允许输入范围内的任意整数。"""
+    combo = QComboBox()
+    combo.setEditable(True)
+    combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+    for value in (64, 128, 256, 512, 1024, 2048, 4096, 8192):
+        combo.addItem(str(value), value)
+    combo.setValidator(QIntValidator(64, 8192, combo))
+    return combo
+
+
+def _set_combo_data(combo: QComboBox, value, fallback=0) -> None:
+    try:
+        index = combo.findData(int(value))
+    except (TypeError, ValueError):
+        index = -1
+    if index < 0:
+        index = combo.findData(fallback)
+    combo.setCurrentIndex(max(0, index))
+
+
 
 class SettingsWindow(_DraggableMixin, QWidget):
     """高级设置：侧栏分类 + 卡片内容；支持中/英界面。"""
@@ -265,6 +302,7 @@ class SettingsWindow(_DraggableMixin, QWidget):
 
         self._target = QComboBox()
         self._target.addItems(LANGUAGES)
+        self._translation_font_size = _font_size_combo()
         self._history_enabled = QCheckBox()
         self._history_privacy_tip = QLabel()
         self._history_privacy_tip.setWordWrap(True)
@@ -293,10 +331,12 @@ class SettingsWindow(_DraggableMixin, QWidget):
             return sp
 
         self._win_interval = _ms_spin()
+        self._win_font_size = _font_size_combo()
         self._win_annotate = QComboBox()
         self._win_annotate.addItem("", False)
         self._win_annotate.addItem("", True)
         self._reg_interval = _ms_spin()
+        self._reg_font_size = _font_size_combo()
         self._reg_annotate = QComboBox()
         self._reg_annotate.addItem("", False)
         self._reg_annotate.addItem("", True)
@@ -315,9 +355,13 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._ann_color_swatch.setFixedSize(22, 22)
         self._ann_color.textChanged.connect(self._refresh_color_swatch)
 
-        self._max_tokens = QSpinBox()
-        self._max_tokens.setRange(64, 8192)
-        self._max_tokens.setSingleStep(128)
+        self._max_tokens = _max_tokens_combo()
+
+        self._model_file = QComboBox()
+        self._model_file.setMinimumContentsLength(28)
+        self._model_note = QLabel()
+        self._model_note.setWordWrap(True)
+        self._model_note.setStyleSheet("color:#aaa;font-size:12px;")
 
         self._stack = QStackedWidget()
         self._stack.addWidget(self._page_general())
@@ -434,6 +478,9 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._card_general_title.setText(tr("card_general"))
         self._card_general_hint.setText(tr("card_general_hint"))
         self._lab_target.setText(tr("target_lang"))
+        self._lab_translation_font_size.setText(tr("translate_font_size"))
+        self._translation_font_size.setItemText(0, tr("font_size_default"))
+        self._translation_font_size.setToolTip(tr("translate_font_size_tip"))
         self._history_enabled.setText(tr("history_enabled"))
         self._history_privacy_tip.setText(tr("history_privacy_tip"))
         self._lab_ann_color.setText(tr("ann_color"))
@@ -453,6 +500,9 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._card_win_title.setText(tr("card_window"))
         self._card_win_hint.setText(tr("card_window_hint"))
         self._lab_win_interval.setText(tr("interval"))
+        self._lab_win_font_size.setText(tr("watch_font_size"))
+        self._win_font_size.setItemText(0, tr("font_size_default"))
+        self._win_font_size.setToolTip(tr("watch_font_size_tip"))
         self._lab_win_mode.setText(tr("display_mode"))
         self._win_interval.setSuffix(tr("ms_suffix"))
         wi = self._win_annotate.currentIndex()
@@ -468,6 +518,9 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._card_reg_title.setText(tr("card_region"))
         self._card_reg_hint.setText(tr("card_region_hint"))
         self._lab_reg_interval.setText(tr("interval"))
+        self._lab_reg_font_size.setText(tr("watch_font_size"))
+        self._reg_font_size.setItemText(0, tr("font_size_default"))
+        self._reg_font_size.setToolTip(tr("watch_font_size_tip"))
         self._lab_reg_mode.setText(tr("display_mode"))
         self._reg_interval.setSuffix(tr("ms_suffix"))
         ri = self._reg_annotate.currentIndex()
@@ -482,6 +535,13 @@ class SettingsWindow(_DraggableMixin, QWidget):
 
         self._card_adv_title.setText(tr("card_advanced"))
         self._card_adv_hint.setText(tr("card_advanced_hint"))
+        self._lab_model_file.setText(tr("model_file"))
+        self._model_file.setToolTip(
+            tr("model_file_tip", directory=str(RUNTIME_MODELS))
+        )
+        self._model_note.setText(
+            tr("model_file_note", directory=str(RUNTIME_MODELS))
+        )
         self._lab_max_tokens.setText("max_tokens")
         self._max_tokens.setToolTip(tr("max_tokens_tip"))
 
@@ -557,6 +617,10 @@ class SettingsWindow(_DraggableMixin, QWidget):
         lay.addWidget(self._hint_ui_lang)
         r2, self._lab_target = _form_row("", self._target)
         lay.addLayout(r2)
+        r3, self._lab_translation_font_size = _form_row(
+            "", self._translation_font_size
+        )
+        lay.addLayout(r3)
         lay.addWidget(self._history_enabled)
         lay.addWidget(self._history_privacy_tip)
         lay.addLayout(self._annotate_color_row())
@@ -580,9 +644,11 @@ class SettingsWindow(_DraggableMixin, QWidget):
     def _page_window(self) -> QWidget:
         card, lay, self._card_win_title, self._card_win_hint = _settings_card("", "")
         r1, self._lab_win_interval = _form_row("", self._win_interval)
-        r2, self._lab_win_mode = _form_row("", self._win_annotate)
+        r2, self._lab_win_font_size = _form_row("", self._win_font_size)
+        r3, self._lab_win_mode = _form_row("", self._win_annotate)
         lay.addLayout(r1)
         lay.addLayout(r2)
+        lay.addLayout(r3)
         tip_card, tip_lay, self._card_win_ann_title, self._card_win_ann_hint = _settings_card("", "")
         tip_lay.addWidget(self._win_skip_target)
         return self._wrap_scroll(card, tip_card)
@@ -590,16 +656,21 @@ class SettingsWindow(_DraggableMixin, QWidget):
     def _page_region(self) -> QWidget:
         card, lay, self._card_reg_title, self._card_reg_hint = _settings_card("", "")
         r1, self._lab_reg_interval = _form_row("", self._reg_interval)
-        r2, self._lab_reg_mode = _form_row("", self._reg_annotate)
+        r2, self._lab_reg_font_size = _form_row("", self._reg_font_size)
+        r3, self._lab_reg_mode = _form_row("", self._reg_annotate)
         lay.addLayout(r1)
         lay.addLayout(r2)
+        lay.addLayout(r3)
         tip_card, tip_lay, self._card_reg_ann_title, self._card_reg_ann_hint = _settings_card("", "")
         tip_lay.addWidget(self._reg_skip_target)
         return self._wrap_scroll(card, tip_card)
 
     def _page_advanced(self) -> QWidget:
         card, lay, self._card_adv_title, self._card_adv_hint = _settings_card("", "")
+        r0, self._lab_model_file = _form_row("", self._model_file)
         r1, self._lab_max_tokens = _form_row("max_tokens", self._max_tokens)
+        lay.addLayout(r0)
+        lay.addWidget(self._model_note)
         lay.addLayout(r1)
         return self._wrap_scroll(card)
 
@@ -690,6 +761,10 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._ui_lang.setCurrentIndex(1 if self._lang == "en" else 0)
         self._ui_lang.blockSignals(False)
         self._target.setCurrentText(cfg.get("target_language", "简体中文"))
+        _set_combo_data(
+            self._translation_font_size,
+            cfg.get("translate_window_font_size", 0),
+        )
         self._history_enabled.setChecked(bool(cfg.get("history_enabled", True)))
         self._hk_shot.set_value(cfg["hotkey_screenshot"])
         self._hk_word.set_value(cfg["hotkey_word"])
@@ -697,10 +772,12 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._hk_ocr.set_value(cfg["hotkey_silent_ocr"])
         self._hk_region.set_value(cfg["hotkey_region_watch"])
         self._win_interval.setValue(int(cfg.get("window_watch_interval_ms", 800)))
+        _set_combo_data(self._win_font_size, cfg.get("window_watch_font_size", 0))
         self._win_annotate.setCurrentIndex(
             1 if cfg.get("window_watch_annotate") else 0
         )
         self._reg_interval.setValue(int(cfg.get("region_watch_interval_ms", 800)))
+        _set_combo_data(self._reg_font_size, cfg.get("region_watch_font_size", 0))
         self._reg_annotate.setCurrentIndex(
             1 if cfg.get("region_watch_annotate") else 0
         )
@@ -714,7 +791,57 @@ class SettingsWindow(_DraggableMixin, QWidget):
             self._normalize_hex_color(str(cfg.get("annotate_text_color", "#00F0FF")))
         )
         self._refresh_color_swatch()
-        self._max_tokens.setValue(int(cfg.get("max_tokens", 512)))
+        self._reload_model_choices()
+        max_tokens = int(cfg.get("max_tokens", 512))
+        max_tokens_index = self._max_tokens.findData(max_tokens)
+        if max_tokens_index >= 0:
+            self._max_tokens.setCurrentIndex(max_tokens_index)
+        else:
+            self._max_tokens.setCurrentIndex(-1)
+            self._max_tokens.setEditText(str(max_tokens))
+
+    @staticmethod
+    def _model_path_key(value: str) -> str:
+        try:
+            return str(resolve_path(value)).casefold()
+        except (OSError, ValueError):
+            return str(value).strip().casefold()
+
+    def _reload_model_choices(self):
+        """每次打开设置都重新扫描 runtime/models，下载后无需重启即可看到列表。"""
+        current = str(self._cfg.get("model_path") or "").strip()
+        current_key = self._model_path_key(current) if current else ""
+        models = available_translation_models()
+
+        self._model_file.blockSignals(True)
+        self._model_file.clear()
+        current_index = -1
+        for model in models:
+            portable = to_portable_path(model)
+            self._model_file.addItem(model.name, portable)
+            if self._model_path_key(portable) == current_key:
+                current_index = self._model_file.count() - 1
+
+        # 兼容旧配置中的外部路径或已经丢失的文件；不在保存其它设置时擅自改模型。
+        if current and current_index < 0:
+            current_path = resolve_path(current)
+            if is_gguf_model(current_path):
+                label = self._tr("model_current_external", name=current_path.name)
+            else:
+                label = self._tr("model_current_missing", name=current_path.name)
+            self._model_file.insertItem(0, label, to_portable_path(current))
+            current_index = 0
+
+        if self._model_file.count() == 0:
+            self._model_file.addItem(self._tr("model_none"), "")
+            self._model_file.setEnabled(False)
+            current_index = 0
+        else:
+            self._model_file.setEnabled(True)
+            if current_index < 0:
+                current_index = 0
+        self._model_file.setCurrentIndex(current_index)
+        self._model_file.blockSignals(False)
 
     def _on_hotkey_recording(self, on: bool):
         """录入热键时暂停全局监听，避免与输入框抢键。"""
@@ -740,24 +867,57 @@ class SettingsWindow(_DraggableMixin, QWidget):
 
         lang = self._ui_lang.currentData() or "zh"
         self._lang = "en" if str(lang).startswith("en") else "zh"
+        try:
+            max_tokens = int(self._max_tokens.currentText().strip())
+        except (TypeError, ValueError):
+            max_tokens = 0
+        if not 64 <= max_tokens <= 8192:
+            topmost_message(
+                "warning",
+                self._tr("max_tokens_invalid_title"),
+                self._tr("max_tokens_invalid_body"),
+                parent=self,
+            )
+            return
+        old_model = str(self._cfg.get("model_path") or "").strip()
+        selected_model = str(self._model_file.currentData() or "").strip()
+        model_changed = bool(
+            selected_model
+            and self._model_path_key(selected_model) != self._model_path_key(old_model)
+        )
+        if model_changed and not is_gguf_model(resolve_path(selected_model)):
+            topmost_message(
+                "warning",
+                self._tr("model_invalid_title"),
+                self._tr("model_invalid_body", path=selected_model),
+                parent=self,
+            )
+            return
         draft = {
             "ui_language": self._lang,
             "target_language": self._target.currentText(),
             "history_enabled": self._history_enabled.isChecked(),
+            "translate_window_font_size": int(
+                self._translation_font_size.currentData() or 0
+            ),
             "hotkey_screenshot": self._hk_shot.value,
             "hotkey_word": self._hk_word.value,
             "hotkey_window": self._hk_win.value,
             "hotkey_silent_ocr": self._hk_ocr.value,
             "hotkey_region_watch": self._hk_region.value,
             "window_watch_interval_ms": self._win_interval.value(),
+            "window_watch_font_size": int(self._win_font_size.currentData() or 0),
             "window_watch_annotate": self._win_annotate.currentData(),
             "window_annotate_skip_target_lang": self._win_skip_target.isChecked(),
             "region_watch_interval_ms": self._reg_interval.value(),
+            "region_watch_font_size": int(self._reg_font_size.currentData() or 0),
             "region_watch_annotate": self._reg_annotate.currentData(),
             "region_annotate_skip_target_lang": self._reg_skip_target.isChecked(),
             "annotate_text_color": self._normalize_hex_color(self._ann_color.text()),
-            "max_tokens": self._max_tokens.value(),
+            "max_tokens": max_tokens,
         }
+        if selected_model:
+            draft["model_path"] = to_portable_path(selected_model)
         conflicts = find_hotkey_conflicts({**self._cfg, **draft})
         if conflicts:
             topmost_message(
@@ -773,7 +933,9 @@ class SettingsWindow(_DraggableMixin, QWidget):
         if self._on_saved:
             self._on_saved()
         geo = self.frameGeometry()
-        toast_msg = self._tr("saved_toast")
+        toast_msg = self._tr(
+            "saved_restart_toast" if model_changed else "saved_toast"
+        )
         self.hide()
         show_toast(toast_msg, at_rect=geo, msec=1500)
 
@@ -930,6 +1092,8 @@ class InputTranslateWindow(_DraggableMixin, QWidget):
 
         self._input = QTextEdit()
         self._output = QTextEdit(readOnly=True)
+        self._default_input_font = QFont(self._input.font())
+        self._default_output_font = QFont(self._output.font())
 
         self._lang = QComboBox()
         self._lang.addItems(LANGUAGES)
@@ -987,6 +1151,7 @@ class InputTranslateWindow(_DraggableMixin, QWidget):
             "QPushButton:checked{background:rgba(0,150,255,150);}"
         )
         self.apply_ui_language()
+        self.sync_font_size_from_cfg()
 
     def apply_ui_language(self):
         self.setWindowTitle(_ti("tw_title"))
@@ -1018,6 +1183,21 @@ class InputTranslateWindow(_DraggableMixin, QWidget):
         self._block_lang_signal = True
         self._lang.setCurrentText(lang)
         self._block_lang_signal = False
+
+    def sync_font_size_from_cfg(self):
+        """按配置更新输入和译文区域字号；0 表示保留系统默认字号。"""
+        try:
+            size = int(self._cfg.get("translate_window_font_size", 0))
+        except (TypeError, ValueError):
+            size = 0
+        for widget, default_font in (
+            (self._input, self._default_input_font),
+            (self._output, self._default_output_font),
+        ):
+            font = QFont(default_font)
+            if 8 <= size <= 48:
+                font.setPixelSize(size)
+            widget.setFont(font)
 
     def mouseMoveEvent(self, event):
         # 固定后不可拖动

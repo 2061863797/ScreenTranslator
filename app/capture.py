@@ -3,6 +3,7 @@
 
 import ctypes
 import threading
+from ctypes import wintypes
 
 import numpy as np
 
@@ -12,6 +13,31 @@ ctypes.windll.shcore.SetProcessDpiAwareness(2)
 # 每项：(Qt 逻辑 x,y,w,h, mss 原生 x,y,w,h)。只保存整数，不跨线程访问 QScreen。
 _SCREEN_LAYOUT: list[tuple[int, int, int, int, int, int, int, int]] = []
 _LAYOUT_LOCK = threading.RLock()
+
+# 翻译浮层始终使用 WDA_NONE，保证 BitBlt、系统截图和录屏都能正常工作。
+# WDA_EXCLUDEFROMCAPTURE 只供框选遮罩使用；该遮罩显示前已经完成桌面抓取。
+_WDA_NONE = 0x00000000
+_WDA_EXCLUDEFROMCAPTURE = 0x00000011
+_user32 = ctypes.WinDLL("user32", use_last_error=True)
+_SetWindowDisplayAffinity = _user32.SetWindowDisplayAffinity
+_SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
+_SetWindowDisplayAffinity.restype = wintypes.BOOL
+
+
+def set_window_capture_excluded(hwnd: int, excluded: bool) -> bool:
+    """设置本进程顶层窗口是否从屏幕捕获中排除。"""
+    try:
+        handle = int(hwnd)
+    except (TypeError, ValueError):
+        return False
+    if not handle:
+        return False
+    try:
+        affinity = _WDA_EXCLUDEFROMCAPTURE if excluded else _WDA_NONE
+        return bool(_SetWindowDisplayAffinity(handle, affinity))
+    except Exception:
+        # 旧版 Windows 或不支持的窗口类型会失败；屏幕捕获仍可继续。
+        return False
 
 
 def configure_qt_screens(screens) -> None:

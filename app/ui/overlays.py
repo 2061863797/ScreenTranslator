@@ -7,10 +7,19 @@
 - RegionWatchFrame：区域翻译识别框（可拖动 / 固定）
 """
 
-import ctypes
+import numpy as np
 
 from PySide6.QtCore import QPoint, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QRegion, QShowEvent
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QImage,
+    QPainter,
+    QPen,
+    QRegion,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -21,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..capture import set_window_capture_excluded
 from ..i18n import t as _t
 from .theme import (
     ACCENT_QCOLOR,
@@ -41,19 +51,23 @@ _FLAGS_TOP = (
     | Qt.WindowType.Tool
 )
 
-# Win10 2004+：窗口对人眼可见，但被 BitBlt/mss 等屏幕捕获排除
-# 这样区域 OCR 不会扫到浮层，也不必每轮 hide/show（那会造成闪烁）
-_WDA_EXCLUDEFROMCAPTURE = 0x00000011
-
 
 def _exclude_from_capture(widget: QWidget) -> None:
-    """标记窗口不参与屏幕捕获（失败则静默忽略，旧系统无此 API）。"""
+    """让仅用于框选的窗口不参与屏幕捕获。"""
     try:
         hwnd = int(widget.winId())
         if hwnd:
-            ctypes.windll.user32.SetWindowDisplayAffinity(
-                hwnd, _WDA_EXCLUDEFROMCAPTURE
-            )
+            set_window_capture_excluded(hwnd, True)
+    except Exception:
+        pass
+
+
+def _allow_capture(widget: QWidget) -> None:
+    """恢复普通显示亲和性，让系统截图和录屏能捕获翻译浮层。"""
+    try:
+        hwnd = int(widget.winId())
+        if hwnd:
+            set_window_capture_excluded(hwnd, False)
     except Exception:
         pass
 
@@ -79,12 +93,13 @@ def _move_if_changed(widget: QWidget, x: int, y: int) -> bool:
     widget.move(x, y)
     return True
 
-class _CaptureExcludedMixin:
-    """顶层浮层混入：显示时排除屏幕捕获，避免区域 OCR 读到自己。"""
+
+class _CaptureAllowedMixin:
+    """翻译浮层显示时保持可被系统截图和录屏捕获。"""
 
     def showEvent(self, event: QShowEvent):
         super().showEvent(event)
-        _exclude_from_capture(self)
+        _allow_capture(self)
 
 
 class _DraggableMixin:
@@ -110,7 +125,7 @@ class _DraggableMixin:
         super().mouseReleaseEvent(event)
 
 
-class SubtitleBar(_CaptureExcludedMixin, QWidget):
+class SubtitleBar(_CaptureAllowedMixin, QWidget):
     """持续翻译的悬浮字幕条：
 
     - 文字层：鼠标穿透，固定尺寸，长文在框内滚动（不随译文自动改大小）
@@ -162,7 +177,7 @@ class SubtitleBar(_CaptureExcludedMixin, QWidget):
         for w in self.layer_widgets():
             set_overlay_layer(w, self._layer_owner)
             if w.isVisible():
-                _exclude_from_capture(w)
+                _allow_capture(w)
 
     def restack_layer(self) -> None:
         """目标窗 z 变化后重贴（仅窗口翻译）。"""
@@ -189,7 +204,7 @@ class SubtitleBar(_CaptureExcludedMixin, QWidget):
         if self.isVisible():
             self._place_chrome()
             self._show_chrome()
-            _exclude_from_capture(self)
+            _allow_capture(self)
 
     def set_mode(self, mode: str, emit: bool = False):
         self.mode = mode
@@ -331,23 +346,23 @@ class SubtitleBar(_CaptureExcludedMixin, QWidget):
             _show_once(self._vscroll)
             need = self._content_h > self._text_rect_size().height()
             self._vscroll.set_enabled(need)
-            if not getattr(self._vscroll, "_capture_excluded", False):
-                _exclude_from_capture(self._vscroll)
-                self._vscroll._capture_excluded = True  # type: ignore[attr-defined]
+            if not getattr(self._vscroll, "_capture_allowed", False):
+                _allow_capture(self._vscroll)
+                self._vscroll._capture_allowed = True  # type: ignore[attr-defined]
         else:
             if self._vscroll.isVisible():
                 self._vscroll.hide()
         if self._interactive:
             _show_once(self._grip)
-            if not getattr(self._grip, "_capture_excluded", False):
-                _exclude_from_capture(self._grip)
-                self._grip._capture_excluded = True  # type: ignore[attr-defined]
+            if not getattr(self._grip, "_capture_allowed", False):
+                _allow_capture(self._grip)
+                self._grip._capture_allowed = True  # type: ignore[attr-defined]
         else:
             if self._grip.isVisible():
                 self._grip.hide()
-        if not getattr(self._ctrl, "_capture_excluded", False):
-            _exclude_from_capture(self._ctrl)
-            self._ctrl._capture_excluded = True  # type: ignore[attr-defined]
+        if not getattr(self._ctrl, "_capture_allowed", False):
+            _allow_capture(self._ctrl)
+            self._ctrl._capture_allowed = True  # type: ignore[attr-defined]
 
     def set_text(self, text: str):
         """更新译文：框大小不变，过长用滚动条。已显示时只重绘，不反复 raise。
@@ -364,7 +379,7 @@ class SubtitleBar(_CaptureExcludedMixin, QWidget):
             elif self.width() < self._MIN_W:
                 self.resize(max(self.width(), 280), self._DEFAULT_H)
             self.show()
-            _exclude_from_capture(self)
+            _allow_capture(self)
             # 新建原生窗后重新挂到目标层
             if self._layer_owner:
                 self.set_layer_owner(self._layer_owner)
@@ -406,7 +421,7 @@ class SubtitleBar(_CaptureExcludedMixin, QWidget):
         super().hide()
 
 
-class _SubtitleVScroll(_CaptureExcludedMixin, QWidget):
+class _SubtitleVScroll(_CaptureAllowedMixin, QWidget):
     """字幕条右侧纵向滚动条（独立顶层窗，可点）。
 
     显隐只由 SubtitleBar._show_chrome 控制；set_range 绝不 hide，
@@ -443,7 +458,7 @@ class _SubtitleVScroll(_CaptureExcludedMixin, QWidget):
         self._bar_widget.setEnabled(bool(on))
 
 
-class _SubtitleResizeGrip(_CaptureExcludedMixin, QWidget):
+class _SubtitleResizeGrip(_CaptureAllowedMixin, QWidget):
     """右下角缩放把手：独立窗口 + grabMouse，拖出按钮外仍跟手。"""
 
     def __init__(self, bar: SubtitleBar):
@@ -490,7 +505,7 @@ class _SubtitleResizeGrip(_CaptureExcludedMixin, QWidget):
             event.accept()
 
 
-class _SubtitleCtrl(_CaptureExcludedMixin, QWidget):
+class _SubtitleCtrl(_CaptureAllowedMixin, QWidget):
     """字幕条控制小条：拖动把手 + 模式按钮 + 关闭（可点）。"""
 
     def __init__(self, bar: SubtitleBar):
@@ -567,7 +582,7 @@ class _SubtitleCtrl(_CaptureExcludedMixin, QWidget):
         self._drag_offset = None
 
 
-class _RegionCtrl(_CaptureExcludedMixin, QWidget):
+class _RegionCtrl(_CaptureAllowedMixin, QWidget):
     """区域识别框控制条：与窗口翻译字幕/备注条同一套 CTRL_STYLE。"""
 
     def __init__(self, frame: "RegionWatchFrame"):
@@ -610,7 +625,7 @@ class _RegionCtrl(_CaptureExcludedMixin, QWidget):
         self._layer_owner = int(owner_hwnd) if owner_hwnd else None
         set_overlay_layer(self, self._layer_owner)
         if self.isVisible():
-            _exclude_from_capture(self)
+            _allow_capture(self)
 
     def restack_layer(self) -> None:
         if self._layer_owner and self.isVisible():
@@ -638,7 +653,7 @@ class _RegionCtrl(_CaptureExcludedMixin, QWidget):
         _move_if_changed(self, nx, ny)
         _show_once(self)
         if first:
-            _exclude_from_capture(self)
+            _allow_capture(self)
         # 区域识别框控制条保持自身 raise；窗口层由 set_layer_owner 管
         if not self._layer_owner:
             self.raise_()
@@ -666,7 +681,7 @@ class _RegionCtrl(_CaptureExcludedMixin, QWidget):
             event.accept()
 
 
-class RegionWatchFrame(_CaptureExcludedMixin, QWidget):
+class RegionWatchFrame(_CaptureAllowedMixin, QWidget):
     """区域翻译识别框：仅描边识别区 + 右下角缩放。
 
     顶栏控制（拖动 / 固定）与窗口翻译共用同一套浮层控制条样式（CTRL_STYLE），
@@ -712,7 +727,7 @@ class RegionWatchFrame(_CaptureExcludedMixin, QWidget):
         self._update_hit_mask()
         _show_once(self)
         if first:
-            _exclude_from_capture(self)
+            _allow_capture(self)
         self._ctrl._sync_pin_text()
         self._place_ctrl()
         self.update()
@@ -899,7 +914,7 @@ class RegionWatchFrame(_CaptureExcludedMixin, QWidget):
             painter.restore()
 
 
-class AnnotateCtrl(_CaptureExcludedMixin, QWidget):
+class AnnotateCtrl(_CaptureAllowedMixin, QWidget):
     """备注模式控制小条：字幕 / 跳过目标语 / 关闭（可点，贴在目标外侧）。"""
 
     stop_requested = Signal()
@@ -951,7 +966,7 @@ class AnnotateCtrl(_CaptureExcludedMixin, QWidget):
         self._layer_owner = int(owner_hwnd) if owner_hwnd else None
         set_overlay_layer(self, self._layer_owner)
         if self.isVisible():
-            _exclude_from_capture(self)
+            _allow_capture(self)
 
     def restack_layer(self) -> None:
         if self._layer_owner and self.isVisible():
@@ -978,12 +993,12 @@ class AnnotateCtrl(_CaptureExcludedMixin, QWidget):
         _move_if_changed(self, nx, ny)
         _show_once(self)
         if first:
-            _exclude_from_capture(self)
+            _allow_capture(self)
         if self._layer_owner:
             restack_above_owner(self, self._layer_owner)
 
 
-class AnnotationOverlay(_CaptureExcludedMixin, QWidget):
+class AnnotationOverlay(_CaptureAllowedMixin, QWidget):
     """备注模式：每行译文贴在对应原文正下方（越界则贴上方），
     覆盖整个目标区域，鼠标完全穿透，不挡操作。
 
@@ -1004,7 +1019,7 @@ class AnnotationOverlay(_CaptureExcludedMixin, QWidget):
         self._layer_owner = int(owner_hwnd) if owner_hwnd else None
         set_overlay_layer(self, self._layer_owner)
         if self.isVisible():
-            _exclude_from_capture(self)
+            _allow_capture(self)
 
     def restack_layer(self) -> None:
         if self._layer_owner and self.isVisible():
@@ -1031,7 +1046,7 @@ class AnnotationOverlay(_CaptureExcludedMixin, QWidget):
         first = not self.isVisible()
         _show_once(self)
         if first:
-            _exclude_from_capture(self)
+            _allow_capture(self)
         if self._layer_owner:
             restack_above_owner(self, self._layer_owner)
         self.update()
@@ -1040,30 +1055,80 @@ class AnnotationOverlay(_CaptureExcludedMixin, QWidget):
         self._items = []
         self.hide()
 
+    def _layout_items(
+        self,
+    ) -> tuple[QFont, list[tuple[tuple[int, int, int, int], str]]]:
+        """统一计算屏幕绘制与 OCR 遮罩位置，避免两者坐标漂移。"""
+        font = QFont()
+        font.setPixelSize(13)
+        fm = QFontMetrics(font)
+        width, height = self.width(), self.height()
+        layout = []
+        for (x1, y1, x2, y2), text in self._items:
+            if not text:
+                continue
+            text_width = fm.horizontalAdvance(text) + 10
+            text_height = fm.height() + 4
+            # 默认：贴原文正下方；下方越界则贴上方；水平对齐原文左缘
+            draw_x = min(x1, max(0, width - text_width)) + 5
+            draw_y = y2 + 2
+            if draw_y + text_height > height:
+                draw_y = y1 - text_height - 2
+            if draw_y < 0:
+                draw_y = 0
+            draw_width = max(1, text_width - 10)
+            layout.append((
+                (draw_x, draw_y, draw_x + draw_width, draw_y + text_height),
+                text,
+            ))
+        return font, layout
+
+    def capture_mask(self) -> np.ndarray | None:
+        """按实际字体和布局渲染译文透明度遮罩，供区域 OCR 恢复底图。"""
+        if not self.isVisible() or not self._items:
+            return None
+        width, height = self.width(), self.height()
+        if width <= 0 or height <= 0:
+            return None
+        image = QImage(
+            width,
+            height,
+            QImage.Format.Format_ARGB32_Premultiplied,
+        )
+        image.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        font, layout = self._layout_items()
+        painter.setFont(font)
+        painter.setPen(Qt.GlobalColor.white)
+        for (x1, y1, x2, y2), text in layout:
+            painter.drawText(
+                x1,
+                y1,
+                x2 - x1,
+                y2 - y1,
+                Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextSingleLine,
+                text,
+            )
+        painter.end()
+        stride = image.bytesPerLine()
+        pixels = np.frombuffer(
+            image.constBits(),
+            dtype=np.uint8,
+            count=image.sizeInBytes(),
+        ).reshape(height, stride)
+        bgra = pixels[:, : width * 4].reshape(height, width, 4)
+        return bgra[:, :, 3].copy()
+
     def paintEvent(self, event):
         if not self._items:
             return
         painter = QPainter(self)
-        font = QFont()
-        font.setPixelSize(13)
+        font, layout = self._layout_items()
         painter.setFont(font)
-        fm = painter.fontMetrics()
-        W, H = self.width(), self.height()
         painter.setPen(self._text_color)
-        for (x1, y1, x2, y2), text in self._items:
-            if not text:
-                continue
-            tw = fm.horizontalAdvance(text) + 10
-            th = fm.height() + 4
-            # 默认：贴原文正下方；下方越界则贴上方；水平对齐原文左缘
-            ax = min(x1, max(0, W - tw))
-            ay = y2 + 2
-            if ay + th > H:
-                ay = y1 - th - 2
-            if ay < 0:
-                ay = 0
+        for (x1, y1, x2, y2), text in layout:
             painter.drawText(
-                ax + 5, ay, tw - 10, th,
+                x1, y1, x2 - x1, y2 - y1,
                 Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextSingleLine,
                 text,
             )

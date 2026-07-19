@@ -670,6 +670,7 @@ class App:
             w.annotations_ready,
             w.history_ready,
             w.window_moved,
+            w.content_cleared,
         ):
             try:
                 sig.disconnect()
@@ -868,9 +869,10 @@ class App:
             profile=profile,
         )
         self._watcher.subtitle_ready.connect(self.subtitle.set_text)
-        self._watcher.annotations_ready.connect(self.annotation.set_items)
+        self._watcher.annotations_ready.connect(self._on_watch_annotations)
         self._watcher.history_ready.connect(self._on_watch_history)
         self._watcher.window_moved.connect(self._on_target_window_moved)
+        self._watcher.content_cleared.connect(self._on_watch_content_cleared)
         self._watcher.stopped.connect(self._on_watch_stopped)
         self._watcher.start()
 
@@ -883,13 +885,43 @@ class App:
         self._watch_rect = rect
         if self._watcher and self._watcher.isRunning():
             self._watcher.set_region(rect)
+        if self._watch_annotate is True:
+            # 移动/缩放后旧译文坐标已失效；先清空，确保下一帧是干净底图。
+            self.annotation.set_items([])
         self.annotation.update_geometry(rect)
+        self._sync_annotation_mask()
         # 跟随模式才重贴；自由/固定保持用户拖好的字幕位置
         if self.subtitle.mode == "follow":
             self.subtitle.attach_below(rect, outside=True)
         if self.annotate_ctrl.isVisible():
             self.annotate_ctrl.place_above(rect)
         self.log.info("区域识别框更新 %s", rect)
+
+    def _on_watch_annotations(self, items: list) -> None:
+        """主线程绘制备注，并把精确像素遮罩同步给下一轮 OCR。"""
+        if not self._watcher or self._watch_annotate is not True:
+            return
+        self.annotation.set_items(items)
+        self._sync_annotation_mask()
+
+    def _sync_annotation_mask(self) -> None:
+        watcher = self._watcher
+        if watcher is None:
+            return
+        mask = None
+        if self._watch_region is not None and self._watch_annotate is True:
+            mask = self.annotation.capture_mask()
+        watcher.set_annotation_mask(mask)
+
+    def _on_watch_content_cleared(self) -> None:
+        """源文字连续消失时同步清空译文，不保留上一条过期内容。"""
+        if not self._watcher:
+            return
+        if self._watch_annotate is True:
+            self.annotation.set_items([])
+            self._sync_annotation_mask()
+        else:
+            self.subtitle.set_text("")
 
     def _on_watch_history(self, source: str, translation: str, mode: str):
         """持续翻译有实质新译文时写入历史。"""
@@ -972,6 +1004,7 @@ class App:
             self.log.info("已切换为备注模式 profile=%s", profile)
         else:
             self.log.info("已切换为字幕条模式 profile=%s", profile)
+        self._sync_annotation_mask()
 
     def _annotate_skip_cfg_key(self) -> str:
         """当前会话对应的「跳过目标语」配置键。

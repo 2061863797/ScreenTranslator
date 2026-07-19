@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """持续翻译监视线程：定时捕获目标（窗口或屏幕区域）→ OCR → 差异检测 → 翻译。"""
 
-import hashlib
 import threading
 import time
 import traceback
@@ -22,6 +21,29 @@ _SKIP_TARGET = "\x00SKIP_TARGET"
 _log = get_logger("watch")
 
 
+def _dilate_mask(mask: np.ndarray, radius: int = 2) -> np.ndarray:
+    """扩张少量像素，覆盖 DWM 缩放和文字抗锯齿产生的边缘。"""
+    active = np.asarray(mask, dtype=bool)
+    if not active.any() or radius <= 0:
+        return active.copy()
+    height, width = active.shape
+    expanded = active.copy()
+    for dy in range(-radius, radius + 1):
+        src_y1 = max(0, -dy)
+        src_y2 = min(height, height - dy)
+        dst_y1 = max(0, dy)
+        dst_y2 = min(height, height + dy)
+        for dx in range(-radius, radius + 1):
+            src_x1 = max(0, -dx)
+            src_x2 = min(width, width - dx)
+            dst_x1 = max(0, dx)
+            dst_x2 = min(width, width + dx)
+            expanded[dst_y1:dst_y2, dst_x1:dst_x2] |= active[
+                src_y1:src_y2, src_x1:src_x2
+            ]
+    return expanded
+
+
 def _is_invalid_window_handle_error(exc: BaseException) -> bool:
     """目标窗在检查与截图之间关闭时，pywin32 返回错误 1400。"""
     code = getattr(exc, "winerror", None)
@@ -30,23 +52,8 @@ def _is_invalid_window_handle_error(exc: BaseException) -> bool:
     return code == 1400
 
 
-def _image_fingerprint(img: np.ndarray) -> bytes:
-    """轻量画面指纹：降采样 + 粗量化，画面几乎不变时跳过 OCR。"""
-    if img is None or img.size == 0:
-        return b""
-    # 取灰度近似并缩到 32x32
-    small = img[:: max(1, img.shape[0] // 32), :: max(1, img.shape[1] // 32)]
-    if small.ndim == 3:
-        gray = small.mean(axis=2).astype(np.uint8)
-    else:
-        gray = small.astype(np.uint8)
-    # 再量化，忽略轻微抗锯齿/光标闪烁
-    quant = (gray // 16).astype(np.uint8)
-    return hashlib.blake2b(quant.tobytes(), digest_size=16).digest()
-
-
 class WindowWatcher(QThread):
-    """文字有实质变化才重新翻译，避免每帧都压 OCR/LLM。
+    """每个设定间隔持续 OCR，文字有实质变化时才调用翻译模型。
 
     监视源二选一：hwnd（窗口，含被遮挡部分）或 region（屏幕区域 x,y,w,h）。
 
@@ -61,6 +68,7 @@ class WindowWatcher(QThread):
     annotations_ready = Signal(list)
     history_ready = Signal(str, str, str)
     window_moved = Signal(int, int, int, int)
+    content_cleared = Signal()
     stopped = Signal(str)
 
     def __init__(self, ocr: OcrEngine, translator: Translator, cfg: dict,
@@ -75,6 +83,9 @@ class WindowWatcher(QThread):
         self._hwnd = hwnd
         self._region = region
         self._region_lock = threading.Lock()
+        self._annotation_mask_lock = threading.Lock()
+        self._annotation_mask: np.ndarray | None = None
+        self._annotation_clean_frame: np.ndarray | None = None
         self._ocr = ocr
         self._translator = translator
         self._cfg = cfg
@@ -83,7 +94,7 @@ class WindowWatcher(QThread):
         self._running = True
         self._last_text = ""
         self._last_rect = None
-        self._last_fp: bytes | None = None
+        self._empty_ocr_frames = 0
         # 备注模式：原文→译文，画面只变几行时只重译变化行
         self._line_tr_cache: dict[str, str] = {}
         self._last_skip_target: bool | None = None
@@ -93,17 +104,72 @@ class WindowWatcher(QThread):
             return
         self._display_mode = mode
         self._last_text = ""
-        self._last_fp = None
+        self._empty_ocr_frames = 0
         self._line_tr_cache.clear()
         self._last_skip_target = None
+        self.set_annotation_mask(None, reset_reference=True)
 
     def set_region(self, region: tuple[int, int, int, int] | None):
         """区域监视时拖动选区后更新（线程安全）。"""
         with self._region_lock:
             self._region = region
-        self._last_fp = None
         self._last_text = ""
+        self._empty_ocr_frames = 0
         # 选区变了，旧行框可能失效，但同文案译文仍可复用
+        self.set_annotation_mask(None, reset_reference=True)
+
+    def set_annotation_mask(
+        self, mask: np.ndarray | None, *, reset_reference: bool = False
+    ) -> None:
+        """更新译文像素遮罩；布局重置时同时丢弃旧干净帧。"""
+        prepared = None
+        if mask is not None and mask.ndim == 2 and mask.size:
+            prepared = _dilate_mask(mask > 0)
+        with self._annotation_mask_lock:
+            self._annotation_mask = prepared
+            if reset_reference:
+                self._annotation_clean_frame = None
+
+    def _remove_annotation_overlay(self, image: np.ndarray) -> np.ndarray:
+        """用上一张干净帧恢复译文像素，OCR 永远只看到原始区域。"""
+        with self._annotation_mask_lock:
+            mask = self._annotation_mask
+            reference = self._annotation_clean_frame
+
+        clean = image
+        mask_matches = mask is not None and mask.shape == image.shape[:2]
+        reference_matches = (
+            reference is not None and reference.shape == image.shape
+        )
+        if mask_matches and reference_matches:
+            clean = image.copy()
+            clean[mask] = reference[mask]
+        elif mask_matches:
+            # 正常流程在首个译文出现前已有干净帧；这里只处理极端竞态。
+            try:
+                import cv2
+
+                clean = cv2.inpaint(
+                    image,
+                    mask.astype(np.uint8) * 255,
+                    2,
+                    cv2.INPAINT_TELEA,
+                )
+            except Exception:
+                clean = image.copy()
+
+        with self._annotation_mask_lock:
+            self._annotation_clean_frame = clean.copy()
+        return clean
+
+    def _observe_empty_ocr_frame(self) -> None:
+        """连续两轮无文字才清空，兼顾及时消失和单帧 OCR 抖动。"""
+        self._empty_ocr_frames += 1
+        if self._empty_ocr_frames < 2 or not self._last_text:
+            return
+        self._last_text = ""
+        self.content_cleared.emit()
+        _log.info("连续两轮未识别到文字，已清空持续翻译显示")
 
     def stop(self):
         self._running = False
@@ -141,7 +207,7 @@ class WindowWatcher(QThread):
                         self._last_skip_target = skip_now
                         self._line_tr_cache.clear()
                         self._last_text = ""
-                        self._last_fp = None
+                        self._empty_ocr_frames = 0
                 t0 = time.time()
 
                 try:
@@ -156,24 +222,19 @@ class WindowWatcher(QThread):
                     _log.warning("监视目标无法捕获，结束")
                     self.stopped.emit("监视目标已关闭或无法捕获")
                     return
+                if self._profile == "region" and self._display_mode == "annotate":
+                    img = self._remove_annotation_overlay(img)
                 if rect != self._last_rect:
                     self._last_rect = rect
                     self.window_moved.emit(*rect)
 
-                # 画面几乎没变：跳过 OCR/翻译，省 GPU
-                fp = _image_fingerprint(img)
-                if self._last_fp is not None and fp == self._last_fp:
-                    remaining = max(0.02, interval - (time.time() - t0))
-                    end = time.time() + remaining
-                    while self._running and time.time() < end:
-                        time.sleep(min(0.02, max(0.001, end - time.time())))
-                    continue
-                self._last_fp = fp
-
                 lines = self._ocr.recognize(img)
                 text = "\n".join(ln.text for ln in lines)
 
-                if text.strip():
+                if not text.strip():
+                    self._observe_empty_ocr_frame()
+                else:
+                    self._empty_ocr_frames = 0
                     sim = SequenceMatcher(None, self._last_text, text).ratio()
                     if sim < threshold:
                         self._last_text = text

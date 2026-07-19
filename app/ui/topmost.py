@@ -100,7 +100,7 @@ def set_overlay_layer(widget: QWidget, owner_hwnd: int | None) -> None:
     - owner_hwnd 为 None（区域翻译 / 停止后）：恢复 WindowStaysOnTopHint，
       区域没有目标窗可跟随时仍需可见。
 
-    改 flag 会重建原生 HWND，调用方应在之后补 _exclude_from_capture 等。
+    改 flag 会重建原生 HWND，调用方应在之后重新应用显示亲和性等属性。
     """
     if widget is None:
         return

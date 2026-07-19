@@ -2,7 +2,7 @@
 """功能窗口：设置、翻译历史、统一翻译窗口（输入/划词/截屏共用）。"""
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QColor, QFont, QGuiApplication
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QIntValidator
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -258,6 +258,17 @@ def _font_size_combo() -> QComboBox:
     return combo
 
 
+def _max_tokens_combo() -> QComboBox:
+    """常用值可直接选，同时允许输入范围内的任意整数。"""
+    combo = QComboBox()
+    combo.setEditable(True)
+    combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+    for value in (64, 128, 256, 512, 1024, 2048, 4096, 8192):
+        combo.addItem(str(value), value)
+    combo.setValidator(QIntValidator(64, 8192, combo))
+    return combo
+
+
 def _set_combo_data(combo: QComboBox, value, fallback=0) -> None:
     try:
         index = combo.findData(int(value))
@@ -344,9 +355,7 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._ann_color_swatch.setFixedSize(22, 22)
         self._ann_color.textChanged.connect(self._refresh_color_swatch)
 
-        self._max_tokens = QSpinBox()
-        self._max_tokens.setRange(64, 8192)
-        self._max_tokens.setSingleStep(128)
+        self._max_tokens = _max_tokens_combo()
 
         self._model_file = QComboBox()
         self._model_file.setMinimumContentsLength(28)
@@ -783,7 +792,13 @@ class SettingsWindow(_DraggableMixin, QWidget):
         )
         self._refresh_color_swatch()
         self._reload_model_choices()
-        self._max_tokens.setValue(int(cfg.get("max_tokens", 512)))
+        max_tokens = int(cfg.get("max_tokens", 512))
+        max_tokens_index = self._max_tokens.findData(max_tokens)
+        if max_tokens_index >= 0:
+            self._max_tokens.setCurrentIndex(max_tokens_index)
+        else:
+            self._max_tokens.setCurrentIndex(-1)
+            self._max_tokens.setEditText(str(max_tokens))
 
     @staticmethod
     def _model_path_key(value: str) -> str:
@@ -852,6 +867,18 @@ class SettingsWindow(_DraggableMixin, QWidget):
 
         lang = self._ui_lang.currentData() or "zh"
         self._lang = "en" if str(lang).startswith("en") else "zh"
+        try:
+            max_tokens = int(self._max_tokens.currentText().strip())
+        except (TypeError, ValueError):
+            max_tokens = 0
+        if not 64 <= max_tokens <= 8192:
+            topmost_message(
+                "warning",
+                self._tr("max_tokens_invalid_title"),
+                self._tr("max_tokens_invalid_body"),
+                parent=self,
+            )
+            return
         old_model = str(self._cfg.get("model_path") or "").strip()
         selected_model = str(self._model_file.currentData() or "").strip()
         model_changed = bool(
@@ -887,7 +914,7 @@ class SettingsWindow(_DraggableMixin, QWidget):
             "region_watch_annotate": self._reg_annotate.currentData(),
             "region_annotate_skip_target_lang": self._reg_skip_target.isChecked(),
             "annotate_text_color": self._normalize_hex_color(self._ann_color.text()),
-            "max_tokens": self._max_tokens.value(),
+            "max_tokens": max_tokens,
         }
         if selected_model:
             draft["model_path"] = to_portable_path(selected_model)

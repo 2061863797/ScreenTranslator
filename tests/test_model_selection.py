@@ -76,6 +76,63 @@ class ModelSettingsTests(unittest.TestCase):
             self.assertIn("重启软件", show_toast.call_args.args[0])
 
 
+class MaxTokensSettingsTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.qapp = QApplication.instance() or QApplication([])
+
+    def test_presets_and_custom_value_are_both_available(self):
+        cfg = dict(DEFAULTS)
+        cfg["max_tokens"] = 700
+
+        with (
+            patch("app.ui.windows.available_translation_models", return_value=[]),
+            patch("app.ui.windows.config.save") as save_cfg,
+            patch("app.ui.windows.show_toast"),
+            patch("app.hotkeys.find_hotkey_conflicts", return_value=[]),
+        ):
+            window = SettingsWindow(cfg)
+            try:
+                presets = [
+                    window._max_tokens.itemData(index)
+                    for index in range(window._max_tokens.count())
+                ]
+                self.assertEqual(
+                    presets,
+                    [64, 128, 256, 512, 1024, 2048, 4096, 8192],
+                )
+                self.assertEqual(window._max_tokens.currentText(), "700")
+
+                window._max_tokens.setEditText("768")
+                window._save()
+            finally:
+                window.close()
+                window.deleteLater()
+                self.qapp.processEvents()
+
+        self.assertEqual(cfg["max_tokens"], 768)
+        save_cfg.assert_called_once_with(cfg)
+
+    def test_invalid_custom_value_is_not_saved(self):
+        cfg = dict(DEFAULTS)
+        with (
+            patch("app.ui.windows.available_translation_models", return_value=[]),
+            patch("app.ui.windows.config.save") as save_cfg,
+            patch("app.ui.windows.topmost_message") as message,
+        ):
+            window = SettingsWindow(cfg)
+            try:
+                window._max_tokens.setEditText("")
+                window._save()
+            finally:
+                window.close()
+                window.deleteLater()
+                self.qapp.processEvents()
+
+        save_cfg.assert_not_called()
+        message.assert_called_once()
+
+
 class SetupConfigTests(unittest.TestCase):
     def test_setup_preserves_selected_model_path(self):
         with tempfile.TemporaryDirectory() as tmp:

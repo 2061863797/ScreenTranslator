@@ -147,6 +147,8 @@ def _validated_values(raw: object) -> dict:
 
     if "server_port" in out and not 1 <= out["server_port"] <= 65535:
         out.pop("server_port")
+    if "max_tokens" in out and not 64 <= out["max_tokens"] <= 8192:
+        out.pop("max_tokens")
     for key in ("window_watch_interval_ms", "region_watch_interval_ms"):
         if key in out and not 50 <= out[key] <= 60000:
             out.pop(key)

@@ -24,7 +24,7 @@ Key: `ui_language` = `zh` | `en` (whole UI).
 | Region display | `region_watch_annotate` | |
 | Region skip target | `region_annotate_skip_target_lang` | |
 | Translation model | `model_path` | choose a valid `.gguf` placed directly in `runtime\models`; restart after saving |
-| max_tokens | `max_tokens` | default 512 |
+| max_tokens | `max_tokens` | presets from 64 to 8192, or enter any integer in that range; default 512 |
 
 Mouse side buttons: `mouse.x1` / `mouse.x2`.  
 Other llama options: `config.json` / `config.example.json`.

@@ -46,6 +46,14 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(loaded["window_watch_font_size"], 20)
         self.assertEqual(loaded["region_watch_font_size"], 0)
 
+    def test_invalid_max_tokens_falls_back_to_default(self):
+        config.CONFIG_PATH.write_text(
+            json.dumps({"max_tokens": 8193}),
+            encoding="utf-8",
+        )
+        loaded = config.load()
+        self.assertEqual(loaded["max_tokens"], 512)
+
     def test_save_is_atomic_and_readable(self):
         data = dict(config.DEFAULTS)
         data["target_language"] = "英语"

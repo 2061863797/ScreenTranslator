@@ -1,42 +1,63 @@
-# runtime
+# runtime 资源说明
 
-| 目录 | 是否随源码 | 说明 |
-|------|------------|------|
-| `paddlex/official_models` | 是 | OCR 模型 |
-| `models/` | 否 | 翻译用 GGUF，见 Releases **models** 包 |
-| `llama/` | 否 | llama-server + DLL，见 Releases **llama** 包 |
+`runtime` 分为三部分：
 
-`config.json` 为本机文件，不进仓库；用 `.\setup.ps1` 生成或复制 `config.example.json`。
+| 目录 | 来源 | 内容 |
+|------|------|------|
+| `paddlex\official_models\` | 源码包自带 | PaddleOCR 检测和识别模型 |
+| `models\` | Releases 的 **models** 附件 | HY-MT GGUF 翻译模型 |
+| `llama\` | Releases 的 **llama** 附件 | `llama-server.exe` 及依赖 DLL |
 
-## Releases 两个压缩包
+`config.json` 和 `venv` 由每台电脑在本机生成，不属于 runtime 发布附件。
 
-1. 下载 **models**、**llama** 各一个 zip（不要再找整包 `runtime-*.zip`）。
-2. 解压到**项目根**（与 `run.py` 同级），结果应是：
+## 默认 Release 方案
+
+Releases 只提供 **models**、**llama** 两个附件；PaddleX OCR 模型已经包含在源码包中，不需要重复下载。
+
+当前 `llama` 附件是 NVIDIA CUDA 13 版本，适合 NVIDIA 显卡和可正常工作的较新驱动。附件已包含 CUDA 运行库 DLL，无需另装 CUDA Toolkit。
+
+把 **models**、**llama** 两个附件都解压到当前 `runtime\` 目录后，应得到：
 
 ```text
-runtime\models\HY-MT1.5-1.8B-Q4_K_M.gguf   （或其它量化）
-runtime\llama\llama-server.exe             （与 DLL 同目录）
+runtime\models\HY-MT1.5-1.8B-Q4_K_M.gguf
+runtime\llama\llama-server.exe
+runtime\llama\*.dll
+runtime\paddlex\official_models\PP-OCRv6_medium_det\
+runtime\paddlex\official_models\PP-OCRv6_medium_rec\
 ```
 
-若 zip 内层是 `models\` / `llama\` 文件夹，解到 `runtime\` 下即可；若已是文件列表，分别放进上述两目录。
+检查资源：
 
-## 备选（无 Release 时）
+```powershell
+.\setup.ps1 -Check
+```
 
-项目根：
+## CPU 或缺少 Release 附件
+
+没有 NVIDIA 显卡时，使用 CPU 版 llama：
+
+```powershell
+.\setup.ps1 -CpuOnly -DownloadRuntime
+```
+
+已经解压过默认 CUDA llama 时，可用 CPU 包替换：
+
+```powershell
+.\scripts\download_runtime.ps1 -CpuOnly -SkipModel -Force
+.\setup.ps1 -CpuOnly
+```
+
+有 NVIDIA 但缺少 Release 附件时：
 
 ```powershell
 .\setup.ps1 -DownloadRuntime
-# 或
-.\scripts\download_runtime.ps1
 ```
 
-| 资源 | 地址 |
-|------|------|
-| 模型 | https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF |
-| llama | https://github.com/ggml-org/llama.cpp/releases |
+自动下载来源：
 
-llama 的 exe 与 dll **平铺**进 `runtime\llama\`。
+| 资源 | 官方地址 |
+|------|----------|
+| HY-MT GGUF | https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF |
+| llama.cpp | https://github.com/ggml-org/llama.cpp/releases |
 
-检查：`.\setup.ps1 -Check`
-
-**说明可能由 AI 生成，请自行核对。**
+完整安装步骤见项目根目录的 [README.md](../README.md)。

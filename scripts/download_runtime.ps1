@@ -231,8 +231,7 @@ print('ocr cache ready', pdx)
     }
 } else {
     Write-Host ""
-    Write-Host "  OCR: 未预热。安装依赖后首次截屏会自动下载到 runtime\paddlex"
-    Write-Host "       或: .\scripts\download_runtime.ps1 -WarmOcr"
+    Write-Host "  OCR: 源码应已带 runtime\paddlex\official_models；缺则 -WarmOcr 或首次截屏补拉"
     Write-Host "       说明: https://github.com/PaddlePaddle/PaddleOCR"
 }
 
@@ -240,9 +239,9 @@ Write-Step "完成"
 Write-Host @"
 
   目录:
-    runtime\models\   HY-MT *.gguf
-    runtime\llama\    llama-server.exe + DLL
-    runtime\paddlex\  OCR（WarmOcr 或首次使用后）
+    runtime\models\   HY-MT *.gguf     （Release models 包 / 本脚本）
+    runtime\llama\    llama-server + DLL（Release llama 包 / 本脚本）
+    runtime\paddlex\  OCR（随源码；可选 -WarmOcr）
 
   官方地址:
     模型  https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF

@@ -573,6 +573,29 @@ class App:
             self.region_frame.hide_frame()
         except Exception:
             pass
+        # 隐藏后再解绑，恢复默认置顶（供区域翻译）；避免改 flag 时闪一下
+        try:
+            self._set_watch_layer_owner(None)
+        except Exception:
+            pass
+
+    def _set_watch_layer_owner(self, owner_hwnd: int | None) -> None:
+        """窗口翻译：字幕/备注跟目标窗同层；None=不绑定（区域翻译仍置顶）。"""
+        for w in (self.subtitle, self.annotation, self.annotate_ctrl):
+            try:
+                w.set_layer_owner(owner_hwnd)
+            except Exception:
+                pass
+
+    def _restack_watch_layer(self) -> None:
+        """目标窗移动/激活后，把浮层贴回目标正上方。"""
+        if not self._watch_hwnd:
+            return
+        for w in (self.subtitle, self.annotation, self.annotate_ctrl):
+            try:
+                w.restack_layer()
+            except Exception:
+                pass
 
     def _disconnect_watcher(self, w) -> None:
         """断开监视线程全部信号，避免停止后仍刷新 UI / 历史。"""
@@ -741,10 +764,17 @@ class App:
         # 区域翻译：单独识别框，可拖动 / 固定
         if region is not None:
             self.region_frame.show_region(region)
+            # 区域无目标窗：浮层保持全局置顶
+            self._set_watch_layer_owner(None)
         else:
             self.region_frame.hide_frame()
+            # 窗口翻译：字幕/备注与被译窗口同层，不压在其它应用上
+            self._set_watch_layer_owner(hwnd)
         # 备注=贴原文旁（窗口/区域相同）；字幕条=外侧，不盖住目标
         self._apply_watch_display(annotate, rect, announce=True)
+        # 显示后再绑一次（setWindowFlags / 首次 show 会重建 HWND）
+        if hwnd is not None:
+            self._set_watch_layer_owner(hwnd)
         display = "annotate" if annotate else "subtitle"
         self._watcher = WindowWatcher(
             self.ocr, self.translator, self.cfg,
@@ -845,6 +875,9 @@ class App:
             self.log.exception("set_display_mode 失败")
             return
         self._apply_watch_display(annotate, rect, announce=False)
+        # 切换模式后 HWND 可能重建，重新挂层
+        if self._watch_hwnd is not None:
+            self._set_watch_layer_owner(self._watch_hwnd)
         if annotate:
             # 备注尚无新结果时先空层；下一轮监视会 set_items
             self.annotation.set_items([])
@@ -899,6 +932,8 @@ class App:
             self.annotation.update_geometry(rect)
         if self.annotate_ctrl.isVisible():
             self.annotate_ctrl.place_above(rect)
+        # 目标窗 z 序可能变了：字幕/备注贴回目标正上方（仍非全局置顶）
+        self._restack_watch_layer()
 
     def _on_watch_stopped(self, reason: str):
         """线程自行结束（目标关闭/出错）时的清理。"""

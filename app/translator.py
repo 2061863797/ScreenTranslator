@@ -145,21 +145,20 @@ class Translator:
             prompt = _PROMPT_EN.format(target=en_name, text=text)
 
         max_tokens = self._effective_max_tokens(text, prompt)
-        preview = text.replace("\n", " ")[:80]
         t0 = time.time()
         try:
             out = self._chat(prompt, max_tokens)
             _log.info(
-                "翻译成功 target=%s max_tokens=%s chars=%d→%d %.2fs | %s",
+                "翻译成功 target=%s max_tokens=%s chars=%d→%d %.2fs",
                 target_language, max_tokens, len(text), len(out),
-                time.time() - t0, preview,
+                time.time() - t0,
             )
             return out
         except Exception as e:
             _log.error(
-                "翻译失败 target=%s max_tokens=%s chars=%d %.2fs | %s | %s",
+                "翻译失败 target=%s max_tokens=%s chars=%d %.2fs | %s",
                 target_language, max_tokens, len(text),
-                time.time() - t0, preview, e,
+                time.time() - t0, e,
             )
             raise
 
@@ -245,15 +244,15 @@ class Translator:
         try:
             out = self._chat(prompt, max_tokens)
             _log.info(
-                "翻译成功 target=%s chars~%d→%d %.2fs | %s",
+                "翻译成功 target=%s chars~%d→%d %.2fs",
                 target_language, len(preview), len(out),
-                time.time() - t0, preview[:80],
+                time.time() - t0,
             )
             return out
         except Exception as e:
             _log.error(
-                "翻译失败 target=%s %.2fs | %s | %s",
-                target_language, time.time() - t0, preview[:80], e,
+                "翻译失败 target=%s chars~%d %.2fs | %s",
+                target_language, len(preview), time.time() - t0, e,
             )
             raise
 

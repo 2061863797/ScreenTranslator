@@ -7,21 +7,82 @@
 from __future__ import annotations
 
 import ctypes
+from ctypes import wintypes
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtWidgets import QWidget
 
+from ..applog import get_logger
+
 if TYPE_CHECKING:
     pass
 
 # Win32
 _HWND_TOPMOST = -1
+_HWND_NOTOPMOST = -2
 _SWP_NOSIZE = 0x0001
 _SWP_NOMOVE = 0x0002
 _SWP_SHOWWINDOW = 0x0040
 _SWP_NOACTIVATE = 0x0010
+_SWP_NOOWNERZORDER = 0x0200
+# 顶层窗：GWL/GWLP_HWNDPARENT 表示 owner（从属关系），不是 parent
+_GWLP_HWNDPARENT = -8
+
+_log = get_logger("topmost")
+_user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+try:
+    _SetWindowLongPtr = _user32.SetWindowLongPtrW
+except AttributeError:  # 极少数 32 位环境
+    _SetWindowLongPtr = _user32.SetWindowLongW  # type: ignore[misc, assignment]
+
+_SetWindowLongPtr.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+_SetWindowLongPtr.restype = ctypes.c_ssize_t
+_SetWindowPos = _user32.SetWindowPos
+_SetWindowPos.argtypes = [
+    wintypes.HWND,
+    wintypes.HWND,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    wintypes.UINT,
+]
+_SetWindowPos.restype = wintypes.BOOL
+
+
+def _set_window_owner(hwnd: int, owner_hwnd: int) -> bool:
+    """设置顶层窗 owner；返回 False 时保留 Win32 错误日志。"""
+    ctypes.set_last_error(0)
+    previous = _SetWindowLongPtr(hwnd, _GWLP_HWNDPARENT, owner_hwnd)
+    error = ctypes.get_last_error()
+    if previous == 0 and error:
+        _log.warning(
+            "设置浮层 owner 失败 hwnd=%#x owner=%#x error=%d",
+            hwnd,
+            owner_hwnd,
+            error,
+        )
+        return False
+    return True
+
+
+def _set_window_pos(hwnd: int, after_hwnd: int, flags: int) -> bool:
+    """只调整 Z 序；失败时记录 GetLastError，避免静默失效。"""
+    ctypes.set_last_error(0)
+    if _SetWindowPos(hwnd, after_hwnd, 0, 0, 0, 0, flags):
+        return True
+    error = ctypes.get_last_error()
+    _log.warning(
+        "调整浮层 Z 序失败 hwnd=%#x after=%#x flags=%#x error=%d",
+        hwnd,
+        after_hwnd,
+        flags,
+        error,
+    )
+    return False
 
 
 def ensure_stays_on_top(widget: QWidget) -> None:
@@ -29,6 +90,91 @@ def ensure_stays_on_top(widget: QWidget) -> None:
     flags = widget.windowFlags()
     if not (flags & Qt.WindowType.WindowStaysOnTopHint):
         widget.setWindowFlags(flags | Qt.WindowType.WindowStaysOnTopHint)
+
+
+def set_overlay_layer(widget: QWidget, owner_hwnd: int | None) -> None:
+    """持续翻译浮层的 Z 序策略。
+
+    - owner_hwnd 有值（窗口翻译）：去掉全局置顶，绑定为该窗口的 owned 窗，
+      与目标同层——目标被挡住时译文一起被挡，不压在其它应用上。
+    - owner_hwnd 为 None（区域翻译 / 停止后）：恢复 WindowStaysOnTopHint，
+      区域没有目标窗可跟随时仍需可见。
+
+    改 flag 会重建原生 HWND，调用方应在之后补 _exclude_from_capture 等。
+    """
+    if widget is None:
+        return
+    try:
+        owner = int(owner_hwnd) if owner_hwnd else 0
+    except (TypeError, ValueError):
+        owner = 0
+
+    want_topmost = owner == 0
+    flags = widget.windowFlags()
+    has_top = bool(flags & Qt.WindowType.WindowStaysOnTopHint)
+    flag_dirty = (want_topmost and not has_top) or ((not want_topmost) and has_top)
+
+    if flag_dirty:
+        was_visible = widget.isVisible()
+        if want_topmost:
+            widget.setWindowFlags(flags | Qt.WindowType.WindowStaysOnTopHint)
+        else:
+            widget.setWindowFlags(flags & ~Qt.WindowType.WindowStaysOnTopHint)
+        if was_visible:
+            # setWindowFlags 会 hide，需恢复；不抢焦点
+            widget.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+            widget.show()
+            widget.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
+
+    try:
+        hwnd = int(widget.winId())
+        if not hwnd:
+            _log.warning("浮层没有可用 HWND widget=%s", type(widget).__name__)
+            return
+        swp = (
+            _SWP_NOMOVE
+            | _SWP_NOSIZE
+            | _SWP_NOACTIVATE
+            | _SWP_NOOWNERZORDER
+        )
+        if owner:
+            # 退出 TOPMOST 层，再挂 owner，最后插到目标正上方
+            ok_not_top = _set_window_pos(hwnd, _HWND_NOTOPMOST, swp)
+            ok_owner = _set_window_owner(hwnd, owner)
+            ok_stack = _set_window_pos(hwnd, owner, swp)
+            success = ok_not_top and ok_owner and ok_stack
+        else:
+            ok_owner = _set_window_owner(hwnd, 0)
+            ok_stack = _set_window_pos(hwnd, _HWND_TOPMOST, swp)
+            success = ok_owner and ok_stack
+        if success:
+            widget._st_layer_owner = owner or None  # type: ignore[attr-defined]
+    except Exception:
+        _log.exception("设置浮层层级异常 widget=%s owner=%s", type(widget).__name__, owner)
+
+
+def restack_above_owner(widget: QWidget, owner_hwnd: int) -> None:
+    """目标窗 z 序变化后，把浮层轻轻贴回目标正上方（不改 flag、不激活）。"""
+    if widget is None or not owner_hwnd:
+        return
+    try:
+        hwnd = int(widget.winId())
+        if not hwnd or not widget.isVisible():
+            return
+        _set_window_pos(
+            hwnd,
+            int(owner_hwnd),
+            _SWP_NOMOVE
+            | _SWP_NOSIZE
+            | _SWP_NOACTIVATE
+            | _SWP_NOOWNERZORDER,
+        )
+    except Exception:
+        _log.exception(
+            "重排浮层异常 widget=%s owner=%s",
+            type(widget).__name__,
+            owner_hwnd,
+        )
 
 
 def raise_to_front(widget: QWidget, *, activate: bool = True) -> None:

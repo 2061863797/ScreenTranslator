@@ -1,70 +1,144 @@
 # ScreenTranslator（翻译）
 
-Windows 离线托盘工具：截屏 / 划词 / 窗口·区域实时翻译。  
-OCR = PaddleOCR · 翻译 = 本机 llama-server + HY-MT1.5。
+Windows 本地截屏翻译工具：支持截屏、划词、窗口持续翻译、区域实时翻译和截图取字。
 
-协议：[Apache-2.0](./LICENSE)（源码）· 第三方见 [NOTICE](./NOTICE)  
-English: [README.en.md](./README.en.md)
+- OCR：PaddleOCR
+- 翻译：本机 `llama-server` + HY-MT1.5
+- 界面：Windows 托盘应用，中英文可切换
+- 协议：[Apache-2.0](./LICENSE)；第三方和模型许可见 [NOTICE](./NOTICE)
+- English: [README.en.md](./README.en.md)
 
----
+## 基础说明
 
-## 运行条件
+安装完成后，OCR 和翻译都在本机运行。
 
-| 需要 | 说明 |
-|------|------|
-| Windows 10/11 64 位 | |
-| **Python 3.12**（3.11/3.13 也可） | **不要用 3.14**（Paddle 常装不上） |
-| 磁盘约 5GB+ | |
-| NVIDIA 显卡 | 可选；没有也能跑（更慢） |
+软件由三部分组成：
 
----
+| 内容 | 来源 | 放置位置 |
+|------|------|----------|
+| 程序源码、PaddleX OCR 模型 | 源码包 | `app\`、`runtime\paddlex\` |
+| HY-MT 翻译模型 | Releases 的 **models** 附件 | `runtime\models\` |
+| llama-server（CUDA 版） | Releases 的 **llama** 附件 | `runtime\llama\` |
+| Python 环境和本机配置 | 运行 `setup.ps1` 后生成 | `venv\`、`config.json` |
 
-## 安装
+`翻译.exe` 是便捷启动器，不是包含全部依赖的单文件程序；它仍需要同目录下的 `venv`、`app`、`run.py` 和 `runtime`。
 
-### 1. 下载源码
+## 通用运行条件
 
-GitHub → **Code → Download ZIP** 并解压，或 `git clone` 本仓库。
+无论选择下面哪条路线，电脑都需要满足：
 
-### 2. 下载翻译模型与 llama（约 2GB）
+- Windows 10/11 64 位；
+- Python 3.11、3.12 或 3.13，推荐 **Python 3.12**，不要使用 3.14；
+- 至少约 5 GB 可用磁盘空间；
+- 首次安装 Python 依赖时可以联网。
 
-| 资源 | 从哪来 |
-|------|--------|
-| OCR（`runtime\paddlex\`） | **已随源码**，不用另下 |
-| 配置 `config.json` | 本机生成：`.\setup.ps1` 或复制 `config.example.json` |
-| 翻译模型、llama-server | GitHub **Releases** 两个压缩包 |
+## 快速开始
 
-Releases 下载并解压到源码根（与 `run.py` 同级），使目录成为：
+先根据电脑条件选择一条路线。
+
+### 路线 A：直接使用 Releases 中的整套资源（推荐）
+
+在上述通用条件基础上，这条路线还需要：
+
+- NVIDIA 显卡，`nvidia-smi` 可以正常运行，驱动能够使用 CUDA 13；
+
+Releases 中的 `llama` 附件就是本项目当前使用的 NVIDIA CUDA 13 版本，所需 CUDA 运行库 DLL 已包含在附件中，不需要另外安装 CUDA Toolkit。
+
+#### 1. 准备文件
+
+1. 下载并解压源码包。源码包已经包含 `runtime\paddlex\official_models`。
+2. 在 Releases 下载 **models**、**llama** 两个附件。
+3. 把两个附件都解压到项目的 `runtime\` 目录：**models** 解压后形成 `runtime\models\`，**llama** 解压后形成 `runtime\llama\`。
+
+最终目录应为：
 
 ```text
 ScreenTranslator\
   run.py
-  runtime\models\*.gguf          ← models 压缩包
-  runtime\llama\llama-server.exe ← llama 压缩包
-  runtime\paddlex\official_models\...  ← 源码已带
+  翻译.exe
+  app\
+  runtime\
+    models\
+      HY-MT1.5-1.8B-Q4_K_M.gguf
+    llama\
+      llama-server.exe
+      *.dll
+    paddlex\
+      official_models\
+        PP-OCRv6_medium_det\
+        PP-OCRv6_medium_rec\
 ```
 
-> 只下「Source code」**没有**翻译模型 / llama。没有 Release 时见 [runtime/README.md](./runtime/README.md)，或 `.\setup.ps1 -DownloadRuntime`。
+#### 2. 安装并检查
 
-### 3. 安装环境
-
-在项目根 PowerShell：
+在项目根目录打开 PowerShell：
 
 ```powershell
-# 如无法运行脚本：Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-.\setup.ps1            # 有 NVIDIA
-.\setup.ps1 -CpuOnly   # 无独显
+# 只有脚本被系统拦截时才需要执行：
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+
+.\setup.ps1
 .\setup.ps1 -Check
 ```
 
-### 4. 启动
+`setup.ps1` 会创建 `venv`、安装依赖、生成本机 `config.json`，并自动选择 GPU 配置。
+
+#### 3. 启动
+
+双击 `翻译.exe`，或在 PowerShell 执行：
 
 ```powershell
 venv\Scripts\pythonw.exe run.py
 ```
 
-可选：`.\build.ps1` 生成 `翻译.exe`。
+### 路线 B：电脑不符合默认条件
 
----
+| 情况 | 处理方式 |
+|------|----------|
+| 没有 NVIDIA 显卡 | 使用下面的 CPU 安装命令；不要使用 Releases 中默认的 CUDA `llama` 附件 |
+| NVIDIA 驱动或 CUDA 版 llama 无法启动 | 改用 CPU 模式和 CPU 版 llama |
+| 没有 Releases 附件 | 让脚本从官方来源下载缺失的模型和 llama |
+| 没有 Python，或只有 Python 3.14 | 安装 Python 3.12 后重新执行安装 |
+| 安装了多个 Python | 用 `-Python` 指定 Python 3.11～3.13 的完整路径 |
+
+#### 无 NVIDIA：CPU 一键安装
+
+只需源码包即可执行；如果已经有 Releases 的 `models` 附件，脚本会保留并跳过重复下载。
+
+```powershell
+.\setup.ps1 -CpuOnly -DownloadRuntime
+.\setup.ps1 -Check
+```
+
+CPU 模式可以使用，但 OCR 和翻译速度会明显慢于 NVIDIA GPU。
+
+如果已经解压过默认 CUDA `llama`，需要先用 CPU 版本替换它：
+
+```powershell
+.\scripts\download_runtime.ps1 -CpuOnly -SkipModel -Force
+.\setup.ps1 -CpuOnly
+```
+
+#### 有 NVIDIA，但没有 Releases 附件
+
+```powershell
+.\setup.ps1 -DownloadRuntime
+.\setup.ps1 -Check
+```
+
+脚本会检测 NVIDIA；检测不到时会自动改用 CPU 配置。
+
+#### 指定 Python 3.12
+
+```powershell
+.\setup.ps1 -Python "C:\Path\To\Python312\python.exe"
+```
+
+没有 Python 时可先安装：
+
+```powershell
+winget install Python.Python.3.12
+```
 
 ## 默认热键
 
@@ -72,31 +146,28 @@ venv\Scripts\pythonw.exe run.py
 |------|------|
 | 截屏翻译 | Alt+Q |
 | 划词翻译 | Alt+W |
-| 窗口持续 | Alt+E |
-| 区域实时 | Alt+R |
+| 窗口持续翻译 | Alt+E |
+| 区域实时翻译 | Alt+R |
 | 截图取字 | Alt+S |
 
-托盘可改设置、看历史与日志。持续翻译同时只能开一个。
+托盘菜单可以打开设置、历史和日志。窗口持续翻译与区域实时翻译同时只能运行一个。
 
-常见配置：`n_gpu_layers`（无独显改 `0`）、`ui_language`（`zh`/`en`）。详见设置页 / [SETTINGS.en.md](./SETTINGS.en.md)。
-
----
-
-## 故障
+## 常见问题
 
 | 现象 | 处理 |
 |------|------|
-| 没有翻译模型 / llama | 解压 Release 的 **models**、**llama** 两个包到项目根 |
-| paddle 装不上 | 换 Python 3.12 |
-| GPU 起不来 | `config.json` 里 `n_gpu_layers: 0` |
-| 提示已在运行 | 托盘里已有实例 |
+| 缺少翻译模型或 llama-server | 解压 Releases 的 **models**、**llama** 两个附件，或运行 `.\setup.ps1 -DownloadRuntime` |
+| Paddle 安装失败 | 使用 Python 3.12；仍失败可尝试 `.\setup.ps1 -CpuOnly` |
+| GPU/llama 启动失败 | 更新 NVIDIA 驱动，或切换 CPU 路线 |
+| 提示程序已在运行 | 检查系统托盘，程序只允许一个实例 |
+| 想确认资源是否齐全 | 运行 `.\setup.ps1 -Check` |
 
-日志：`app.log`。
+日志位置：`app.log`。详细设置说明见设置页面和 [SETTINGS.en.md](./SETTINGS.en.md)。
 
----
+更详细的 runtime 目录说明见 [runtime/README.md](./runtime/README.md)。
 
 ## 其它
 
-- 模型等第三方许可见 [NOTICE](./NOTICE)  
+模型等第三方许可见 [NOTICE](./NOTICE)。
 
 **本安装说明可能由 AI 生成，请自行核对路径与 Release 文件名后再操作。**

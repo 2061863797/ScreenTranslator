@@ -192,7 +192,7 @@ function Test-Runtime {
     }
 
     if (-not $ok) {
-        Write-Warn2 "runtime 不齐：请从 Releases 解压 models、llama 两个包到项目根（OCR 随源码；脚本默认可 -DownloadRuntime）。"
+        Write-Warn2 "runtime 不齐：请把 Releases 的 models、llama 两个包解压到 runtime 目录（OCR 随源码；也可用 -DownloadRuntime）。"
     }
     return $ok
 }

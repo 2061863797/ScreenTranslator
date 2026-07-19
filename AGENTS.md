@@ -8,8 +8,8 @@
 - **协议**：源码 **Apache-2.0**（`LICENSE`）；第三方/模型见 `NOTICE`。
 - **栈**：Python 3.11～3.13（推荐 3.12）+ PySide6；OCR = PaddleOCR；翻译 = 本机 `llama-server` + HY-MT1.5。
 - **入口**：`run.py` → `app.main.main`；启动器 `launcher.py` / `翻译.exe`（`build.ps1`）。
-- **路径**：`app/paths.py`；资源在 `runtime/`（发布用 **Release 压缩包**）。
-- **配置**：`config.json` + `config.example.json`；缺省见 `DEFAULTS`。
+- **路径**：`app/paths.py`；`runtime/paddlex` 随源码；`models` / `llama` 用 **Release 两个压缩包**（不传整包 runtime，不传 config.json）。
+- **配置**：本机 `config.json`（gitignore）+ `config.example.json`；缺省见 `DEFAULTS`。
 - **安装**：`setup.ps1` / `scripts/download_runtime.ps1`。用户说明以 **`README.md`** / **`README.en.md`** 为准。
 - **CodeGraph**：`projectPath` = 本仓库根；排除 `venv/`、大模型目录、`*.db`。
 

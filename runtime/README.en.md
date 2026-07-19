@@ -1,18 +1,32 @@
 # runtime
 
-Translation model + llama-server (~2GB) + OCR models.
+| Folder | In source repo? | Notes |
+|--------|-----------------|--------|
+| `paddlex/official_models` | Yes | OCR models |
+| `models/` | No | GGUF — Releases **models** zip |
+| `llama/` | No | llama-server + DLLs — Releases **llama** zip |
 
-- **OCR (`paddlex/official_models`)**: included in the source repo.  
-- **Translation model / llama**: still from Releases or the URLs below.
+`config.json` is local (not in git). Create with `.\setup.ps1` or copy `config.example.json`.
 
-## Get files (model + llama)
+## Two Release packages
 
-1. Repo **Releases** → **`runtime-*.zip`**  
-2. Extract to **project root** (next to `run.py`)  
+1. Download the **models** and **llama** zips (not a single full `runtime-*.zip`).
+2. Extract into the **project root** (next to `run.py`) so you have:
 
-Expect: `runtime\models\*.gguf`, `runtime\llama\llama-server.exe`; OCR at `runtime\paddlex\official_models\` (ships with source).
+```text
+runtime\models\HY-MT1.5-1.8B-Q4_K_M.gguf
+runtime\llama\llama-server.exe   (DLLs alongside)
+```
 
-Fallback: `.\setup.ps1 -DownloadRuntime`, or:
+If the zip already contains a `models\` / `llama\` folder, extract under `runtime\`.
+
+## Fallback (no Release)
+
+```powershell
+.\setup.ps1 -DownloadRuntime
+# or
+.\scripts\download_runtime.ps1
+```
 
 | Asset | URL |
 |-------|-----|

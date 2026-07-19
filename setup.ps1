@@ -192,7 +192,7 @@ function Test-Runtime {
     }
 
     if (-not $ok) {
-        Write-Warn2 "runtime 不齐：请把完整 runtime/ 与本目录一起拷贝（脚本不下载大模型）。"
+        Write-Warn2 "runtime 不齐：请从 Releases 解压 models、llama 两个包到项目根（OCR 随源码；脚本默认可 -DownloadRuntime）。"
     }
     return $ok
 }
@@ -318,7 +318,7 @@ Write-Host '  启动: 双击 翻译.exe  或  venv\Scripts\pythonw.exe run.py'
 Write-Host "  检查: .\setup.ps1 -Check"
 Write-Host "  仅CPU: .\setup.ps1 -CpuOnly"
 Write-Host '  下载资源: .\scripts\download_runtime.ps1  或  .\setup.ps1 -DownloadRuntime'
-Write-Host '  说明: runtime/ 可用脚本下载或整夹拷贝；venv 请每台机器跑本脚本安装'
+Write-Host '  说明: models/llama 用 Release 两包或脚本下载；paddlex 随源码；venv 每机跑本脚本'
 Write-Host ""
 
 if (-not $runtimeOk) { exit 2 }

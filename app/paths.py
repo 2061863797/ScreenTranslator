@@ -55,6 +55,28 @@ def to_portable_path(value: str | Path) -> str:
         return str(p)
 
 
+def is_gguf_model(path: str | Path) -> bool:
+    """仅做本地模型选择所需的轻量校验：扩展名与 GGUF 文件头。"""
+    p = Path(path)
+    if p.suffix.lower() != ".gguf" or not p.is_file():
+        return False
+    try:
+        with p.open("rb") as stream:
+            return stream.read(4) == b"GGUF"
+    except OSError:
+        return False
+
+
+def available_translation_models(models_dir: str | Path | None = None) -> list[Path]:
+    """列出 models 顶层可选择的有效 GGUF，避免把下载中的残缺文件放进设置。"""
+    directory = Path(models_dir) if models_dir is not None else RUNTIME_MODELS
+    try:
+        models = [path for path in directory.iterdir() if is_gguf_model(path)]
+    except OSError:
+        return []
+    return sorted(models, key=lambda path: path.name.casefold())
+
+
 def setup_runtime_env() -> None:
     """在导入 Paddle / 启动服务前调用：把 OCR 缓存指到项目内 runtime/paddlex。"""
     if RUNTIME_PADDLEX.is_dir():

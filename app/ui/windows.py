@@ -30,6 +30,13 @@ from PySide6.QtWidgets import (
 
 from .. import config
 from ..applog import LOG_PATH, get_log_emitter, recent_lines
+from ..paths import (
+    RUNTIME_MODELS,
+    available_translation_models,
+    is_gguf_model,
+    resolve_path,
+    to_portable_path,
+)
 from .overlays import _DraggableMixin
 from .theme import (
     CornerSizeGrip,
@@ -319,6 +326,12 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._max_tokens.setRange(64, 8192)
         self._max_tokens.setSingleStep(128)
 
+        self._model_file = QComboBox()
+        self._model_file.setMinimumContentsLength(28)
+        self._model_note = QLabel()
+        self._model_note.setWordWrap(True)
+        self._model_note.setStyleSheet("color:#aaa;font-size:12px;")
+
         self._stack = QStackedWidget()
         self._stack.addWidget(self._page_general())
         self._stack.addWidget(self._page_hotkeys())
@@ -482,6 +495,13 @@ class SettingsWindow(_DraggableMixin, QWidget):
 
         self._card_adv_title.setText(tr("card_advanced"))
         self._card_adv_hint.setText(tr("card_advanced_hint"))
+        self._lab_model_file.setText(tr("model_file"))
+        self._model_file.setToolTip(
+            tr("model_file_tip", directory=str(RUNTIME_MODELS))
+        )
+        self._model_note.setText(
+            tr("model_file_note", directory=str(RUNTIME_MODELS))
+        )
         self._lab_max_tokens.setText("max_tokens")
         self._max_tokens.setToolTip(tr("max_tokens_tip"))
 
@@ -599,7 +619,10 @@ class SettingsWindow(_DraggableMixin, QWidget):
 
     def _page_advanced(self) -> QWidget:
         card, lay, self._card_adv_title, self._card_adv_hint = _settings_card("", "")
+        r0, self._lab_model_file = _form_row("", self._model_file)
         r1, self._lab_max_tokens = _form_row("max_tokens", self._max_tokens)
+        lay.addLayout(r0)
+        lay.addWidget(self._model_note)
         lay.addLayout(r1)
         return self._wrap_scroll(card)
 
@@ -714,7 +737,51 @@ class SettingsWindow(_DraggableMixin, QWidget):
             self._normalize_hex_color(str(cfg.get("annotate_text_color", "#00F0FF")))
         )
         self._refresh_color_swatch()
+        self._reload_model_choices()
         self._max_tokens.setValue(int(cfg.get("max_tokens", 512)))
+
+    @staticmethod
+    def _model_path_key(value: str) -> str:
+        try:
+            return str(resolve_path(value)).casefold()
+        except (OSError, ValueError):
+            return str(value).strip().casefold()
+
+    def _reload_model_choices(self):
+        """每次打开设置都重新扫描 runtime/models，下载后无需重启即可看到列表。"""
+        current = str(self._cfg.get("model_path") or "").strip()
+        current_key = self._model_path_key(current) if current else ""
+        models = available_translation_models()
+
+        self._model_file.blockSignals(True)
+        self._model_file.clear()
+        current_index = -1
+        for model in models:
+            portable = to_portable_path(model)
+            self._model_file.addItem(model.name, portable)
+            if self._model_path_key(portable) == current_key:
+                current_index = self._model_file.count() - 1
+
+        # 兼容旧配置中的外部路径或已经丢失的文件；不在保存其它设置时擅自改模型。
+        if current and current_index < 0:
+            current_path = resolve_path(current)
+            if is_gguf_model(current_path):
+                label = self._tr("model_current_external", name=current_path.name)
+            else:
+                label = self._tr("model_current_missing", name=current_path.name)
+            self._model_file.insertItem(0, label, to_portable_path(current))
+            current_index = 0
+
+        if self._model_file.count() == 0:
+            self._model_file.addItem(self._tr("model_none"), "")
+            self._model_file.setEnabled(False)
+            current_index = 0
+        else:
+            self._model_file.setEnabled(True)
+            if current_index < 0:
+                current_index = 0
+        self._model_file.setCurrentIndex(current_index)
+        self._model_file.blockSignals(False)
 
     def _on_hotkey_recording(self, on: bool):
         """录入热键时暂停全局监听，避免与输入框抢键。"""
@@ -740,6 +807,20 @@ class SettingsWindow(_DraggableMixin, QWidget):
 
         lang = self._ui_lang.currentData() or "zh"
         self._lang = "en" if str(lang).startswith("en") else "zh"
+        old_model = str(self._cfg.get("model_path") or "").strip()
+        selected_model = str(self._model_file.currentData() or "").strip()
+        model_changed = bool(
+            selected_model
+            and self._model_path_key(selected_model) != self._model_path_key(old_model)
+        )
+        if model_changed and not is_gguf_model(resolve_path(selected_model)):
+            topmost_message(
+                "warning",
+                self._tr("model_invalid_title"),
+                self._tr("model_invalid_body", path=selected_model),
+                parent=self,
+            )
+            return
         draft = {
             "ui_language": self._lang,
             "target_language": self._target.currentText(),
@@ -758,6 +839,8 @@ class SettingsWindow(_DraggableMixin, QWidget):
             "annotate_text_color": self._normalize_hex_color(self._ann_color.text()),
             "max_tokens": self._max_tokens.value(),
         }
+        if selected_model:
+            draft["model_path"] = to_portable_path(selected_model)
         conflicts = find_hotkey_conflicts({**self._cfg, **draft})
         if conflicts:
             topmost_message(
@@ -773,7 +856,9 @@ class SettingsWindow(_DraggableMixin, QWidget):
         if self._on_saved:
             self._on_saved()
         geo = self.frameGeometry()
-        toast_msg = self._tr("saved_toast")
+        toast_msg = self._tr(
+            "saved_restart_toast" if model_changed else "saved_toast"
+        )
         self.hide()
         show_toast(toast_msg, at_rect=geo, msec=1500)
 

@@ -66,7 +66,15 @@ _STRINGS: dict[str, dict[str, str]] = {
         "card_reg_ann_hint": "仅区域备注模式生效，与窗口设置互不影响。",
         "skip_reg_tip": "仅区域备注模式：已是目标语言的行不再送模型、不叠备注。也可在备注条切换（仅影响区域）。",
         "card_advanced": "模型与生成",
-        "card_advanced_hint": "max_tokens 为单次翻译生成上限；过小可能截断，过大略增延迟。",
+        "card_advanced_hint": "从本机 models 目录选择翻译模型，并调整单次生成上限。",
+        "model_file": "翻译模型",
+        "model_file_tip": "只列出 {directory} 顶层且文件头有效的 .gguf 文件",
+        "model_file_note": "请自行下载兼容 llama.cpp 的 GGUF，直接放入 {directory}；重新打开设置可刷新列表，保存后重启软件生效。",
+        "model_none": "未找到可用的 .gguf 模型",
+        "model_current_external": "{name}（当前为外部路径）",
+        "model_current_missing": "{name}（当前文件不可用）",
+        "model_invalid_title": "模型文件不可用",
+        "model_invalid_body": "文件不存在、不是 .gguf，或文件头无效：\n{path}",
         "max_tokens_tip": "单次翻译最大生成长度；过小可能截断，过大略增延迟",
         "card_log": "运行日志",
         "card_log_hint": "文件：{log} · 清空显示不会删除磁盘日志。",
@@ -79,6 +87,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "hk_conflict_title": "热键冲突",
         "hk_conflict_body": "以下热键重复，请修改后再保存：\n\n{list}",
         "saved_toast": "设置已保存",
+        "saved_restart_toast": "设置已保存；重启软件后切换翻译模型",
         "lang_zh": "中文",
         "lang_en": "English",
         # tray
@@ -242,10 +251,18 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Also toggleable on the annotation bar (region session only)."
         ),
         "card_advanced": "Model & generation",
-        "card_advanced_hint": (
-            "max_tokens is the max generation length per request; "
-            "too small truncates, too large may add latency."
+        "card_advanced_hint": "Choose a translation model from the local models folder and set the generation limit.",
+        "model_file": "Translation model",
+        "model_file_tip": "Lists valid .gguf files directly under {directory}",
+        "model_file_note": (
+            "Download a llama.cpp-compatible GGUF yourself and place it directly in {directory}. "
+            "Reopen Settings to refresh the list; restart the app after saving."
         ),
+        "model_none": "No usable .gguf model found",
+        "model_current_external": "{name} (current external path)",
+        "model_current_missing": "{name} (current file unavailable)",
+        "model_invalid_title": "Model file unavailable",
+        "model_invalid_body": "The file is missing, not a .gguf, or has an invalid header:\n{path}",
         "max_tokens_tip": "Max tokens per translation; too small truncates, too large may slow down",
         "card_log": "Runtime log",
         "card_log_hint": "File: {log} · Clearing the view does not delete the log file.",
@@ -258,6 +275,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "hk_conflict_title": "Hotkey conflict",
         "hk_conflict_body": "Duplicate hotkeys; fix before saving:\n\n{list}",
         "saved_toast": "Settings saved",
+        "saved_restart_toast": "Settings saved; restart the app to switch translation models",
         "lang_zh": "中文",
         "lang_en": "English",
         "app_name": "Translator",

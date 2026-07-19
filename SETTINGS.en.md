@@ -20,6 +20,7 @@ Key: `ui_language` = `zh` | `en` (whole UI).
 | Region interval | `region_watch_interval_ms` | ms |
 | Region display | `region_watch_annotate` | |
 | Region skip target | `region_annotate_skip_target_lang` | |
+| Translation model | `model_path` | choose a valid `.gguf` placed directly in `runtime\models`; restart after saving |
 | max_tokens | `max_tokens` | default 512 |
 
 Mouse side buttons: `mouse.x1` / `mouse.x2`.  

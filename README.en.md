@@ -138,6 +138,17 @@ To install Python first:
 winget install Python.Python.3.12
 ```
 
+## Switch translation models
+
+The app does not download additional models automatically. To switch models:
+
+1. Download a translation `.gguf` compatible with `llama.cpp` yourself.
+2. Put the model file directly in `runtime\models\`; do not add another folder level.
+3. Open Tray → Settings → Advanced → Model & generation, select the model, and save.
+4. Exit and restart the app before the new model takes effect.
+
+The model directory is rescanned whenever Settings opens. Only `.gguf` files with a valid file header are listed. Translation suitability, prompt compatibility, and memory requirements depend on the selected model.
+
 ## Default hotkeys
 
 | Action | Key |

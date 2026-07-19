@@ -72,11 +72,18 @@ ScreenTranslator\
 Open PowerShell in the project root:
 
 ```powershell
-# Only needed if Windows blocks local scripts:
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+# Only if Windows reports that the script is unsigned; affects this window only:
+Set-ExecutionPolicy -Scope Process Bypass -Force
 
 .\setup.ps1
 .\setup.ps1 -Check
+```
+
+Archives downloaded by a browser may carry a Mark-of-the-Web flag, so `RemoteSigned` can still block unsigned scripts extracted from them. You can alternatively open the archive's Properties and select Unblock before extracting it. If it is already extracted, run:
+
+```powershell
+Unblock-File .\setup.ps1
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
 ```
 
 `setup.ps1` creates `venv`, installs dependencies, generates the local `config.json`, and selects the GPU configuration automatically.

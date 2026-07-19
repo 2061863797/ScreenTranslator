@@ -74,11 +74,18 @@ ScreenTranslator\
 在项目根目录打开 PowerShell：
 
 ```powershell
-# 只有脚本被系统拦截时才需要执行：
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+# 仅在提示脚本未签名时执行；只影响当前 PowerShell 窗口：
+Set-ExecutionPolicy -Scope Process Bypass -Force
 
 .\setup.ps1
 .\setup.ps1 -Check
+```
+
+浏览器下载的压缩包可能带有“来自互联网”标记，`RemoteSigned` 仍会拦截其中未签名的脚本。也可以在解压前打开压缩包“属性”并勾选“解除锁定”；如果已经解压，可执行：
+
+```powershell
+Unblock-File .\setup.ps1
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
 ```
 
 `setup.ps1` 会创建 `venv`、安装依赖、生成本机 `config.json`，并自动选择 GPU 配置。

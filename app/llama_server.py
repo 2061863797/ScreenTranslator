@@ -8,6 +8,7 @@ host 固定读配置（默认 127.0.0.1，仅本机）。
 import subprocess
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 import requests
@@ -44,6 +45,8 @@ class LlamaServer:
         cfg["server_host"] = self.host
         self.port = int(cfg["server_port"])
         self._proc: subprocess.Popen | None = None
+        self._recent_output: deque[str] = deque(maxlen=30)
+        self._output_thread: threading.Thread | None = None
         # 启动时预热与首次翻译可能并发调用 start，串行化避免重复拉起进程
         self._lock = threading.Lock()
 
@@ -54,9 +57,47 @@ class LlamaServer:
     def is_healthy(self, timeout: float = 2.0) -> bool:
         try:
             r = requests.get(f"{self.base_url}/health", timeout=timeout)
-            return r.status_code == 200
-        except requests.RequestException:
+            if r.status_code != 200:
+                return False
+            data = r.json()
+            return (
+                isinstance(data, dict)
+                and str(data.get("status", "")).strip().lower() in {"ok", "ready"}
+            )
+        except (requests.RequestException, ValueError):
             return False
+
+    def _read_output(self, proc: subprocess.Popen) -> None:
+        """持续消费子进程输出，既避免管道堵塞，也保留启动诊断。"""
+        stream = proc.stdout
+        if stream is None:
+            return
+        try:
+            for raw in stream:
+                line = str(raw).rstrip()
+                if not line:
+                    continue
+                self._recent_output.append(line)
+                _log.info("server: %s", line[:1000])
+        except (OSError, ValueError):
+            pass
+
+    def _terminate_process_locked(self) -> None:
+        """结束并回收本程序持有的进程；调用方必须持有 _lock。"""
+        proc = self._proc
+        if proc is None:
+            return
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+        self._proc = None
+        if self._output_thread is not None:
+            self._output_thread.join(timeout=0.5)
+            self._output_thread = None
 
     def _build_cmd(self, exe: Path) -> list[str]:
         """按配置拼 llama-server 参数（翻译场景默认偏快、省显存）。"""
@@ -116,9 +157,11 @@ class LlamaServer:
             if not self.model_path.exists():
                 raise FileNotFoundError(f"未找到模型文件：{self.model_path}")
 
-            # 上一轮本程序拉起的进程若已僵死，先清掉再启
-            if self._proc is not None and self._proc.poll() is not None:
-                self._proc = None
+            # 上一轮进程还活着却不健康时必须先回收，不能覆盖引用变成孤儿进程。
+            if self._proc is not None:
+                if self._proc.poll() is None:
+                    _log.warning("回收未通过健康检查的旧 llama-server pid=%s", self._proc.pid)
+                self._terminate_process_locked()
 
             cmd = self._build_cmd(exe)
             _log.info(
@@ -135,13 +178,24 @@ class LlamaServer:
             )
             _log.info("cmdline: %s", " ".join(cmd))
             # CREATE_NO_WINDOW：后台运行不弹黑框
+            self._recent_output.clear()
             self._proc = subprocess.Popen(
                 cmd,
                 cwd=str(self.llama_dir),
                 creationflags=subprocess.CREATE_NO_WINDOW,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
             )
+            self._output_thread = threading.Thread(
+                target=self._read_output,
+                args=(self._proc,),
+                daemon=True,
+                name="llama-output",
+            )
+            self._output_thread.start()
             deadline = time.time() + wait_seconds
             while time.time() < deadline:
                 if self.is_healthy():
@@ -154,24 +208,23 @@ class LlamaServer:
                 if self._proc.poll() is not None:
                     code = self._proc.returncode
                     self._proc = None
-                    _log.error("llama-server 启动后立即退出 code=%s", code)
+                    if self._output_thread is not None:
+                        self._output_thread.join(timeout=0.5)
+                        self._output_thread = None
+                    detail = " | ".join(list(self._recent_output)[-5:])
+                    _log.error("llama-server 启动后立即退出 code=%s output=%s", code, detail)
                     raise RuntimeError(
                         f"llama-server 启动后立即退出（返回码 {code}），"
-                        "请检查显卡驱动、模型文件与启动参数"
-                        "（可把 cache_type_k/v 置空或 flash_attn=false 重试）"
+                        f"{detail or '没有可用的服务端输出'}"
                     )
                 time.sleep(0.5)
             _log.error("llama-server %s 秒内未就绪", wait_seconds)
+            self._terminate_process_locked()
             raise TimeoutError(f"llama-server 在 {wait_seconds} 秒内未就绪")
 
     def stop(self) -> None:
         """仅关闭本程序拉起的进程，不影响用户自己启动的实例。"""
         with self._lock:
-            if self._proc and self._proc.poll() is None:
+            if self._proc is not None:
                 _log.info("停止本程序拉起的 llama-server pid=%s", self._proc.pid)
-                self._proc.terminate()
-                try:
-                    self._proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self._proc.kill()
-            self._proc = None
+            self._terminate_process_locked()

@@ -2,21 +2,117 @@
 """屏幕捕获：全屏/区域截图（mss），指定窗口捕获（Win32 PrintWindow）。"""
 
 import ctypes
+import threading
 
 import numpy as np
 
 # 进程级声明 DPI 感知，保证高分屏下坐标与像素一致
 ctypes.windll.shcore.SetProcessDpiAwareness(2)
 
+# 每项：(Qt 逻辑 x,y,w,h, mss 原生 x,y,w,h)。只保存整数，不跨线程访问 QScreen。
+_SCREEN_LAYOUT: list[tuple[int, int, int, int, int, int, int, int]] = []
+_LAYOUT_LOCK = threading.RLock()
 
-def grab_region(x: int, y: int, width: int, height: int) -> np.ndarray:
-    """截取屏幕指定区域，返回 BGR 数组。"""
+
+def configure_qt_screens(screens) -> None:
+    """在 Qt 主线程刷新逻辑坐标到原生像素的显示器映射。"""
     import mss
 
-    with mss.mss() as sct:
-        shot = sct.grab({"left": x, "top": y, "width": width, "height": height})
-        img = np.asarray(shot)  # BGRA
-    return img[:, :, :3].copy()
+    try:
+        with mss.MSS() as sct:
+            native = [
+                (int(m["left"]), int(m["top"]), int(m["width"]), int(m["height"]))
+                for m in sct.monitors[1:]
+            ]
+    except Exception:
+        native = []
+    unused = list(native)
+    layout = []
+    for screen in screens:
+        geo = screen.geometry()
+        lx, ly, lw, lh = geo.x(), geo.y(), geo.width(), geo.height()
+        dpr = max(0.5, float(screen.devicePixelRatio()))
+        expected = (lx, ly, round(lw * dpr), round(lh * dpr))
+        if unused:
+            chosen = min(
+                unused,
+                key=lambda m: (
+                    abs(m[0] - expected[0]) + abs(m[1] - expected[1])
+                    + abs(m[2] - expected[2]) + abs(m[3] - expected[3])
+                ),
+            )
+            unused.remove(chosen)
+        else:
+            chosen = expected
+        layout.append((lx, ly, lw, lh, *chosen))
+    with _LAYOUT_LOCK:
+        _SCREEN_LAYOUT[:] = layout
+
+
+def _resize_bgr(img: np.ndarray, width: int, height: int) -> np.ndarray:
+    if img.shape[1] == width and img.shape[0] == height:
+        return img
+    try:
+        import cv2
+
+        return cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
+    except Exception:
+        ys = np.linspace(0, img.shape[0] - 1, height).astype(np.int32)
+        xs = np.linspace(0, img.shape[1] - 1, width).astype(np.int32)
+        return img[ys][:, xs]
+
+
+def _native_rect_to_logical(
+    x: int, y: int, width: int, height: int
+) -> tuple[int, int, int, int]:
+    with _LAYOUT_LOCK:
+        layout = list(_SCREEN_LAYOUT)
+    cx, cy = x + width / 2, y + height / 2
+    for lx, ly, lw, lh, nx, ny, nw, nh in layout:
+        if nx <= cx < nx + nw and ny <= cy < ny + nh:
+            sx, sy = lw / max(1, nw), lh / max(1, nh)
+            return (
+                round(lx + (x - nx) * sx),
+                round(ly + (y - ny) * sy),
+                max(1, round(width * sx)),
+                max(1, round(height * sy)),
+            )
+    return x, y, width, height
+
+
+def grab_region(x: int, y: int, width: int, height: int) -> np.ndarray:
+    """按 Qt 逻辑坐标截屏；混合 DPI 时分屏抓取并归一到逻辑像素。"""
+    import mss
+
+    if width <= 0 or height <= 0:
+        return np.empty((0, 0, 3), dtype=np.uint8)
+    with _LAYOUT_LOCK:
+        layout = list(_SCREEN_LAYOUT)
+    if not layout:
+        with mss.MSS() as sct:
+            shot = sct.grab({"left": x, "top": y, "width": width, "height": height})
+            return np.asarray(shot)[:, :, :3].copy()
+
+    canvas = np.zeros((height, width, 3), dtype=np.uint8)
+    with mss.MSS() as sct:
+        for lx, ly, lw, lh, nx, ny, nw, nh in layout:
+            ix1, iy1 = max(x, lx), max(y, ly)
+            ix2, iy2 = min(x + width, lx + lw), min(y + height, ly + lh)
+            if ix2 <= ix1 or iy2 <= iy1:
+                continue
+            sx, sy = nw / max(1, lw), nh / max(1, lh)
+            px1 = round(nx + (ix1 - lx) * sx)
+            py1 = round(ny + (iy1 - ly) * sy)
+            px2 = round(nx + (ix2 - lx) * sx)
+            py2 = round(ny + (iy2 - ly) * sy)
+            shot = sct.grab({
+                "left": px1, "top": py1,
+                "width": max(1, px2 - px1), "height": max(1, py2 - py1),
+            })
+            part = np.asarray(shot)[:, :, :3].copy()
+            part = _resize_bgr(part, ix2 - ix1, iy2 - iy1)
+            canvas[iy1 - y:iy2 - y, ix1 - x:ix2 - x] = part
+    return canvas
 
 
 def list_windows() -> list[tuple[int, str]]:
@@ -61,7 +157,10 @@ def grab_window(hwnd: int) -> np.ndarray | None:
         img = np.frombuffer(data, dtype=np.uint8).reshape(
             (info["bmHeight"], info["bmWidth"], 4)
         )
-        return img[:, :, :3].copy()
+        img = img[:, :, :3].copy()
+        px, py = win32gui.ClientToScreen(hwnd, (left, top))
+        _, _, logical_w, logical_h = _native_rect_to_logical(px, py, width, height)
+        return _resize_bgr(img, logical_w, logical_h)
     finally:
         win32gui.DeleteObject(bmp.GetHandle())
         save_dc.DeleteDC()
@@ -75,4 +174,4 @@ def get_window_rect(hwnd: int) -> tuple[int, int, int, int]:
 
     left, top, right, bottom = win32gui.GetClientRect(hwnd)
     x, y = win32gui.ClientToScreen(hwnd, (left, top))
-    return x, y, right - left, bottom - top
+    return _native_rect_to_logical(x, y, right - left, bottom - top)

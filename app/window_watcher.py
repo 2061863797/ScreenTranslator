@@ -22,6 +22,14 @@ _SKIP_TARGET = "\x00SKIP_TARGET"
 _log = get_logger("watch")
 
 
+def _is_invalid_window_handle_error(exc: BaseException) -> bool:
+    """目标窗在检查与截图之间关闭时，pywin32 返回错误 1400。"""
+    code = getattr(exc, "winerror", None)
+    if code is None and exc.args:
+        code = exc.args[0]
+    return code == 1400
+
+
 def _image_fingerprint(img: np.ndarray) -> bytes:
     """轻量画面指纹：降采样 + 粗量化，画面几乎不变时跳过 OCR。"""
     if img is None or img.size == 0:
@@ -136,7 +144,14 @@ class WindowWatcher(QThread):
                         self._last_fp = None
                 t0 = time.time()
 
-                rect, img = self._grab()
+                try:
+                    rect, img = self._grab()
+                except Exception as e:
+                    if not _is_invalid_window_handle_error(e):
+                        raise
+                    _log.info("监视目标窗口已关闭 hwnd=%s", self._hwnd)
+                    self.stopped.emit("目标窗口已关闭")
+                    return
                 if img is None:
                     _log.warning("监视目标无法捕获，结束")
                     self.stopped.emit("监视目标已关闭或无法捕获")

@@ -71,6 +71,8 @@ class OcrTranslateWorker(QThread):
     def run(self):
         t0 = time.time()
         try:
+            if self.isInterruptionRequested():
+                return
             if self._text is not None:
                 source = self._text.strip()
                 _log.info("worker 文本路径 chars=%d translate=%s", len(source), self._do_translate)
@@ -81,6 +83,9 @@ class OcrTranslateWorker(QThread):
                     "worker OCR 行数=%d chars=%d translate=%s",
                     len(lines), len(source), self._do_translate,
                 )
+
+            if self.isInterruptionRequested():
+                return
 
             if not source:
                 _log.warning("worker 未识别到文字")
@@ -93,6 +98,8 @@ class OcrTranslateWorker(QThread):
             if self._do_translate:
                 translation = self._translator.translate(source, self._target)
 
+            if self.isInterruptionRequested():
+                return
             _log.info("worker 完成 %.2fs", time.time() - t0)
             self.finished_ok.emit(source, translation)
         except Exception as e:

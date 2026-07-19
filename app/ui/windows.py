@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -264,6 +265,10 @@ class SettingsWindow(_DraggableMixin, QWidget):
 
         self._target = QComboBox()
         self._target.addItems(LANGUAGES)
+        self._history_enabled = QCheckBox()
+        self._history_privacy_tip = QLabel()
+        self._history_privacy_tip.setWordWrap(True)
+        self._history_privacy_tip.setStyleSheet("color:#aaa;font-size:12px;")
 
         self._hk_shot = HotkeyEdit(cfg["hotkey_screenshot"])
         self._hk_word = HotkeyEdit(cfg["hotkey_word"])
@@ -429,6 +434,8 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._card_general_title.setText(tr("card_general"))
         self._card_general_hint.setText(tr("card_general_hint"))
         self._lab_target.setText(tr("target_lang"))
+        self._history_enabled.setText(tr("history_enabled"))
+        self._history_privacy_tip.setText(tr("history_privacy_tip"))
         self._lab_ann_color.setText(tr("ann_color"))
         self._ann_color.setToolTip(tr("ann_color_tip"))
         self._ann_color_btn.setText(tr("ann_color_pick"))
@@ -550,6 +557,8 @@ class SettingsWindow(_DraggableMixin, QWidget):
         lay.addWidget(self._hint_ui_lang)
         r2, self._lab_target = _form_row("", self._target)
         lay.addLayout(r2)
+        lay.addWidget(self._history_enabled)
+        lay.addWidget(self._history_privacy_tip)
         lay.addLayout(self._annotate_color_row())
         self._ann_color_note = QLabel()
         self._ann_color_note.setWordWrap(True)
@@ -681,6 +690,7 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._ui_lang.setCurrentIndex(1 if self._lang == "en" else 0)
         self._ui_lang.blockSignals(False)
         self._target.setCurrentText(cfg.get("target_language", "简体中文"))
+        self._history_enabled.setChecked(bool(cfg.get("history_enabled", True)))
         self._hk_shot.set_value(cfg["hotkey_screenshot"])
         self._hk_word.set_value(cfg["hotkey_word"])
         self._hk_win.set_value(cfg["hotkey_window"])
@@ -733,6 +743,7 @@ class SettingsWindow(_DraggableMixin, QWidget):
         draft = {
             "ui_language": self._lang,
             "target_language": self._target.currentText(),
+            "history_enabled": self._history_enabled.isChecked(),
             "hotkey_screenshot": self._hk_shot.value,
             "hotkey_word": self._hk_word.value,
             "hotkey_window": self._hk_win.value,
@@ -791,6 +802,8 @@ class HistoryWindow(_DraggableMixin, QWidget):
         self._table.cellDoubleClicked.connect(self._on_double_click)
 
         self._tip = QLabel()
+        self._btn_clear = QPushButton()
+        self._btn_clear.clicked.connect(self._clear_history)
 
         title_bar = QHBoxLayout()
         title_bar.setContentsMargins(4, 2, 2, 2)
@@ -801,6 +814,7 @@ class HistoryWindow(_DraggableMixin, QWidget):
         btn_close.clicked.connect(self.hide)
         title_bar.addWidget(self._title_lbl)
         title_bar.addStretch()
+        title_bar.addWidget(self._btn_clear)
         title_bar.addWidget(btn_close)
 
         container = QWidget()
@@ -827,6 +841,7 @@ class HistoryWindow(_DraggableMixin, QWidget):
         self.setWindowTitle(_ti("hist_title"))
         self._title_lbl.setText(_ti("hist_title"))
         self._tip.setText(_ti("hist_tip"))
+        self._btn_clear.setText(_ti("hist_clear"))
         self._table.setHorizontalHeaderLabels([_ti("hist_src"), _ti("hist_dst")])
 
     def showEvent(self, event):
@@ -837,6 +852,19 @@ class HistoryWindow(_DraggableMixin, QWidget):
             self._table.setItem(r, 0, QTableWidgetItem(src))
             self._table.setItem(r, 1, QTableWidgetItem(dst))
         super().showEvent(event)
+
+    def _clear_history(self):
+        answer = QMessageBox.question(
+            self,
+            _ti("hist_clear"),
+            _ti("hist_clear_confirm"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._storage.clear_history()
+        self._table.setRowCount(0)
 
     def _on_double_click(self, row: int, _column: int):
         src_item = self._table.item(row, 0)
@@ -862,13 +890,18 @@ class _TranslateWorker(QThread):
 
     def run(self):
         try:
-            self.done.emit(self._translator.translate(self._text, self._target))
+            if self.isInterruptionRequested():
+                return
+            result = self._translator.translate(self._text, self._target)
+            if not self.isInterruptionRequested():
+                self.done.emit(result)
         except Exception as e:
             from ..applog import get_logger
             from ..workers import friendly_error
 
             get_logger("ui").exception("翻译面板失败")
-            self.failed.emit(friendly_error(e))
+            if not self.isInterruptionRequested():
+                self.failed.emit(friendly_error(e))
 
 
 class InputTranslateWindow(_DraggableMixin, QWidget):
@@ -1031,6 +1064,12 @@ class InputTranslateWindow(_DraggableMixin, QWidget):
             lambda e: self._output.setPlainText(_ti("tw_fail", e=e))
         )
         self._worker.start()
+
+    def active_worker(self) -> _TranslateWorker | None:
+        """供应用退出流程等待，避免销毁仍在运行的 QThread。"""
+        if self._worker is not None and self._worker.isRunning():
+            return self._worker
+        return None
 
     def _copy(self):
         QApplication.clipboard().setText(self._output.toPlainText())

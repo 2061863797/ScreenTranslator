@@ -16,6 +16,7 @@
   "target_language": "简体中文",
   "ui_language": "zh",
   "max_tokens": 512,
+  "history_enabled": true,
   "ocr_lang": null,
   "ocr_max_side": 1600,
   "ocr_score_min": 0.45,

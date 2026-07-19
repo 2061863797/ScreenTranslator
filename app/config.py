@@ -49,6 +49,8 @@ DEFAULTS = {
     "max_tokens": 512,
     # 本地明文历史；可在设置中关闭，并可在历史窗口手动清空
     "history_enabled": True,
+    # 0=沿用原有默认；非 0 为正文像素字号
+    "translate_window_font_size": 0,
 
     # OCR
     "ocr_lang": None,                # None = PP-OCRv5 自动多语种
@@ -66,6 +68,7 @@ DEFAULTS = {
 
     # 窗口持续翻译（与区域分开）
     "window_watch_interval_ms": 800,
+    "window_watch_font_size": 0,
     "window_watch_diff_threshold": 0.9,
     "window_watch_annotate": False,   # True=备注，False=字幕条
     # 备注模式：跳过已是目标语言的行（窗口 / 区域各自独立）
@@ -73,6 +76,7 @@ DEFAULTS = {
 
     # 区域持续翻译
     "region_watch_interval_ms": 800,
+    "region_watch_font_size": 0,
     "region_watch_diff_threshold": 0.9,
     "region_watch_annotate": True,    # 区域默认备注更直观
     "region_annotate_skip_target_lang": False,
@@ -145,6 +149,13 @@ def _validated_values(raw: object) -> dict:
         out.pop("server_port")
     for key in ("window_watch_interval_ms", "region_watch_interval_ms"):
         if key in out and not 50 <= out[key] <= 60000:
+            out.pop(key)
+    for key in (
+        "translate_window_font_size",
+        "window_watch_font_size",
+        "region_watch_font_size",
+    ):
+        if key in out and out[key] != 0 and not 8 <= out[key] <= 48:
             out.pop(key)
     for key in (
         "window_watch_diff_threshold",

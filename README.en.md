@@ -148,6 +148,8 @@ winget install Python.Python.3.12
 |:---------------------------------:|:----------------------:|
 | ![Live-translation subtitle overlay](./docs/images/live-translation-overlay.png) | ![Inline annotation mode](./docs/images/inline-annotation-mode.png) |
 
+Font size can be configured separately under Settings → General / Window translation / Region translation. “Default” preserves the app's original font sizes, and changes take effect immediately after saving.
+
 ## Switch translation models
 
 The app does not download additional models automatically. To switch models:

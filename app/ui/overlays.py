@@ -144,6 +144,7 @@ class SubtitleBar(_CaptureAllowedMixin, QWidget):
     _MIN_W = 200
     _MIN_H = 80
     _DEFAULT_H = 100
+    _DEFAULT_FONT_SIZE = 16
 
     def __init__(self):
         super().__init__()
@@ -157,7 +158,7 @@ class SubtitleBar(_CaptureAllowedMixin, QWidget):
         self._scroll = 0
         self._content_h = 0
         self._font = QFont()
-        self._font.setPixelSize(16)
+        self._font.setPixelSize(self._DEFAULT_FONT_SIZE)
         # 译文层始终点击穿透
         self.setWindowFlags(_FLAGS_TOP | Qt.WindowType.WindowTransparentForInput)
 
@@ -194,6 +195,21 @@ class SubtitleBar(_CaptureAllowedMixin, QWidget):
         except Exception:
             pass
         self._place_chrome()
+
+    def set_font_size(self, size) -> None:
+        """设置字幕字号；0 或无效值恢复原有默认字号。"""
+        try:
+            requested = int(size)
+        except (TypeError, ValueError):
+            requested = 0
+        resolved = (
+            requested if 8 <= requested <= 48 else self._DEFAULT_FONT_SIZE
+        )
+        if self._font.pixelSize() == resolved:
+            return
+        self._font.setPixelSize(resolved)
+        self._reflow_text()
+        self.update()
 
     def set_interactive(self, on: bool):
         """字幕模式：显示右下角缩放；译文层始终穿透。"""
@@ -1005,6 +1021,8 @@ class AnnotationOverlay(_CaptureAllowedMixin, QWidget):
     默认布局以「对得上是哪一行」为优先，不做复杂空白搜索。
     """
 
+    _DEFAULT_FONT_SIZE = 13
+
     def __init__(self):
         super().__init__()
         self.setWindowFlags(_FLAGS_TOP | Qt.WindowType.WindowTransparentForInput)
@@ -1013,6 +1031,7 @@ class AnnotationOverlay(_CaptureAllowedMixin, QWidget):
         # [(box(x1,y1,x2,y2) 相对区域, 译文), ...]
         self._items: list[tuple[tuple[int, int, int, int], str]] = []
         self._text_color = QColor("#00F0FF")
+        self._font_size = self._DEFAULT_FONT_SIZE
         self._layer_owner: int | None = None
 
     def set_layer_owner(self, owner_hwnd: int | None) -> None:
@@ -1033,6 +1052,21 @@ class AnnotationOverlay(_CaptureAllowedMixin, QWidget):
         if c.rgb() == self._text_color.rgb() and c.alpha() == self._text_color.alpha():
             return
         self._text_color = c
+        if self.isVisible():
+            self.update()
+
+    def set_font_size(self, size) -> None:
+        """设置备注译文字号；0 或无效值恢复原有默认字号。"""
+        try:
+            requested = int(size)
+        except (TypeError, ValueError):
+            requested = 0
+        resolved = (
+            requested if 8 <= requested <= 48 else self._DEFAULT_FONT_SIZE
+        )
+        if self._font_size == resolved:
+            return
+        self._font_size = resolved
         if self.isVisible():
             self.update()
 
@@ -1060,7 +1094,7 @@ class AnnotationOverlay(_CaptureAllowedMixin, QWidget):
     ) -> tuple[QFont, list[tuple[tuple[int, int, int, int], str]]]:
         """统一计算屏幕绘制与 OCR 遮罩位置，避免两者坐标漂移。"""
         font = QFont()
-        font.setPixelSize(13)
+        font.setPixelSize(self._font_size)
         fm = QFontMetrics(font)
         width, height = self.width(), self.height()
         layout = []

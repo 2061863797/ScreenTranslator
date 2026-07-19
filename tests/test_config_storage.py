@@ -32,6 +32,20 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(loaded["server_port"], 8080)
         self.assertIs(loaded["history_enabled"], True)
 
+    def test_font_sizes_accept_default_or_8_to_48_pixels(self):
+        config.CONFIG_PATH.write_text(
+            json.dumps({
+                "translate_window_font_size": 7,
+                "window_watch_font_size": 20,
+                "region_watch_font_size": 49,
+            }),
+            encoding="utf-8",
+        )
+        loaded = config.load()
+        self.assertEqual(loaded["translate_window_font_size"], 0)
+        self.assertEqual(loaded["window_watch_font_size"], 20)
+        self.assertEqual(loaded["region_watch_font_size"], 0)
+
     def test_save_is_atomic_and_readable(self):
         data = dict(config.DEFAULTS)
         data["target_language"] = "英语"

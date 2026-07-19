@@ -858,6 +858,7 @@ class App:
             # 窗口翻译：字幕/备注与被译窗口同层，不压在其它应用上
             self._set_watch_layer_owner(hwnd)
         # 备注=贴原文旁（窗口/区域相同）；字幕条=外侧，不盖住目标
+        self._apply_watch_font_size(profile)
         self._apply_watch_display(annotate, rect, announce=True)
         # 显示后再绑一次（setWindowFlags / 首次 show 会重建 HWND）
         if hwnd is not None:
@@ -931,6 +932,18 @@ class App:
             self.storage.add_history(source, translation, mode)
         except Exception:
             self.log.exception("持续翻译历史写入失败")
+
+    def _apply_watch_font_size(self, profile: str | None = None) -> None:
+        """把当前窗口或区域翻译的独立字号应用到两种显示模式。"""
+        profile = profile or self._watch_profile
+        if profile not in ("window", "region"):
+            return
+        try:
+            size = int(self.cfg.get(f"{profile}_watch_font_size", 0))
+        except (TypeError, ValueError):
+            size = 0
+        self.subtitle.set_font_size(size)
+        self.annotation.set_font_size(size)
 
     def _apply_watch_display(self, annotate: bool, rect, *, announce: bool = False):
         """备注：贴原文旁（窗口/区域同）；字幕条：目标外侧，不遮挡。"""
@@ -1088,6 +1101,7 @@ class App:
             )
         self.apply_ui_language()
         self.translate_win.sync_language_from_cfg()
+        self.translate_win.sync_font_size_from_cfg()
         # 备注译文颜色
         try:
             self.annotation.set_text_color(
@@ -1106,6 +1120,8 @@ class App:
             and self._watch_rect
             and self._watch_profile
         ):
+            self._apply_watch_font_size(self._watch_profile)
+            self._sync_annotation_mask()
             key = f"{self._watch_profile}_watch_annotate"
             annotate = bool(self.cfg.get(key))
             cur = self._watch_annotate

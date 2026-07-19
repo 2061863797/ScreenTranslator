@@ -150,6 +150,8 @@ winget install Python.Python.3.12
 |:----------------:|:--------------------:|
 | ![持续翻译字幕显示](./docs/images/live-translation-overlay.png) | ![区域实时翻译备注模式](./docs/images/inline-annotation-mode.png) |
 
+字体大小可在“设置 → 常规 / 窗口翻译 / 区域翻译”中分别调整；选择“默认”会保留软件原有字号，保存后立即生效。
+
 ## 切换翻译模型
 
 软件不会自动下载额外模型。需要切换时：

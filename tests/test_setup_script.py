@@ -1,0 +1,29 @@
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+class SetupScriptTests(unittest.TestCase):
+    def test_paddle_install_keeps_numpy_compatible_with_paddlex(self):
+        requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+        setup_script = (ROOT / "setup.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("numpy>=1.24,<2.4", requirements)
+        self.assertIn('$numpyRequirement = "numpy>=1.24,<2.4"', setup_script)
+        self.assertIn("-m pip install $numpyRequirement", setup_script)
+
+    def test_install_and_check_modes_verify_dependency_consistency(self):
+        setup_script = (ROOT / "setup.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("function Test-PythonDependencies", setup_script)
+        self.assertEqual(
+            setup_script.count("Test-PythonDependencies -VenvPy $venvPy"),
+            2,
+        )
+        self.assertIn("& $VenvPy -m pip check", setup_script)
+
+
+if __name__ == "__main__":
+    unittest.main()

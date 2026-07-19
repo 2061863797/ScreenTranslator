@@ -132,6 +132,7 @@ function Install-Paddle {
         return
     }
     $kind = "CPU"
+    $numpyRequirement = "numpy>=1.24,<2.4"
     if ($WantGpu) { $kind = "GPU" }
     Write-Step "安装 PaddlePaddle ($kind)"
     if ($WantGpu) {
@@ -142,22 +143,36 @@ function Install-Paddle {
         if ($LASTEXITCODE -eq 0) {
             Write-Ok "已有匹配的 Paddle GPU 3.3.1 / CUDA 12.9"
         } else {
-            & $VenvPy -m pip install --upgrade --force-reinstall "paddlepaddle-gpu==3.3.1" -i $idx
+            & $VenvPy -m pip install --upgrade --force-reinstall "paddlepaddle-gpu==3.3.1" $numpyRequirement -i $idx
         }
         if ($LASTEXITCODE -ne 0) {
             Write-Warn2 "GPU 版安装失败，回退 CPU 版"
             & $VenvPy -m pip uninstall -y paddlepaddle-gpu 2>$null
-            & $VenvPy -m pip install "paddlepaddle==3.3.1" -i "https://www.paddlepaddle.org.cn/packages/stable/cpu/"
+            & $VenvPy -m pip install "paddlepaddle==3.3.1" $numpyRequirement -i "https://www.paddlepaddle.org.cn/packages/stable/cpu/"
         }
     } else {
         & $VenvPy -m pip uninstall -y paddlepaddle-gpu 2>$null
-        & $VenvPy -m pip install "paddlepaddle==3.3.1" -i "https://www.paddlepaddle.org.cn/packages/stable/cpu/"
+        & $VenvPy -m pip install "paddlepaddle==3.3.1" $numpyRequirement -i "https://www.paddlepaddle.org.cn/packages/stable/cpu/"
     }
     if ($LASTEXITCODE -ne 0) {
         throw "Paddle 安装失败，请查看上方 pip 输出"
-    } else {
-        Write-Ok "Paddle 安装步骤完成"
     }
+    # 已有 Paddle 符合版本时也要修复旧安装留下的 NumPy 2.4+。
+    & $VenvPy -m pip install $numpyRequirement
+    if ($LASTEXITCODE -ne 0) {
+        throw "NumPy 兼容版本安装失败，请查看上方 pip 输出"
+    }
+    Write-Ok "Paddle 安装步骤完成"
+}
+
+function Test-PythonDependencies {
+    param([string]$VenvPy)
+    Write-Step "检查 Python 依赖一致性"
+    & $VenvPy -m pip check
+    if ($LASTEXITCODE -ne 0) {
+        throw "Python 依赖存在冲突，请查看上方 pip check 输出"
+    }
+    Write-Ok "Python 依赖无冲突"
 }
 
 function Ensure-Config {
@@ -355,6 +370,7 @@ if ($Check) {
         if (-not (Test-SupportedPython $venvPy)) {
             throw "venv Python 版本不受支持（仅 3.11～3.13）"
         }
+        Test-PythonDependencies -VenvPy $venvPy
         Test-Imports -VenvPy $venvPy
     } else {
         Write-Err2 "尚未创建 venv，完整安装请运行: .\setup.ps1"
@@ -384,6 +400,7 @@ if (-not (Test-SupportedPython $venvPy)) {
 }
 Install-PipPackages -VenvPy $venvPy
 Install-Paddle -VenvPy $venvPy -WantGpu $useGpu
+Test-PythonDependencies -VenvPy $venvPy
 Ensure-Config -UseGpu $useGpu -Threads $threads
 Test-Imports -VenvPy $venvPy
 

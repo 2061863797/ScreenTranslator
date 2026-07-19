@@ -88,7 +88,7 @@ Unblock-File .\setup.ps1
 Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
 ```
 
-`setup.ps1` 会创建 `venv`、安装依赖、生成本机 `config.json`，并自动选择 GPU 配置。
+`setup.ps1` 会创建 `venv`、安装依赖、检查依赖冲突、生成本机 `config.json`，并自动选择 GPU 配置。
 
 #### 3. 启动
 

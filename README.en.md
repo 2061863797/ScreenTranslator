@@ -86,7 +86,7 @@ Unblock-File .\setup.ps1
 Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
 ```
 
-`setup.ps1` creates `venv`, installs dependencies, generates the local `config.json`, and selects the GPU configuration automatically.
+`setup.ps1` creates `venv`, installs dependencies, checks dependency consistency, generates the local `config.json`, and selects the GPU configuration automatically.
 
 #### 3. Run
 

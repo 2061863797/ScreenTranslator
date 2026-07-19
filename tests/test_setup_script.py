@@ -12,7 +12,7 @@ class SetupScriptTests(unittest.TestCase):
 
         self.assertIn("numpy>=1.24,<2.4", requirements)
         self.assertIn('$numpyRequirement = "numpy>=1.24,<2.4"', setup_script)
-        self.assertIn("-m pip install $numpyRequirement", setup_script)
+        self.assertIn("-Arguments @($numpyRequirement)", setup_script)
 
     def test_install_and_check_modes_verify_dependency_consistency(self):
         setup_script = (ROOT / "setup.ps1").read_text(encoding="utf-8")
@@ -23,6 +23,13 @@ class SetupScriptTests(unittest.TestCase):
             2,
         )
         self.assertIn("& $VenvPy -m pip check", setup_script)
+
+    def test_pip_install_retries_without_a_broken_cache(self):
+        setup_script = (ROOT / "setup.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("function Install-PipWithRetry", setup_script)
+        self.assertIn("-m pip install --no-cache-dir @Arguments", setup_script)
+        self.assertIn('Arguments @("-r", (Join-Path $Root "requirements.txt"))', setup_script)
 
 
 if __name__ == "__main__":

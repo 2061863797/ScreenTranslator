@@ -33,6 +33,22 @@ function Write-Ok([string]$msg)   { Write-Host "  [OK] $msg" -ForegroundColor Gr
 function Write-Warn2([string]$msg){ Write-Host "  [!] $msg" -ForegroundColor Yellow }
 function Write-Err2([string]$msg) { Write-Host "  [X] $msg" -ForegroundColor Red }
 
+function Install-PipWithRetry {
+    param(
+        [string]$VenvPy,
+        [string[]]$Arguments,
+        [string]$FailureMessage
+    )
+    & $VenvPy -m pip install @Arguments
+    if ($LASTEXITCODE -eq 0) { return }
+
+    # pip 的本机缓存偶尔会损坏或与索引哈希不一致；不删除用户全局缓存，
+    # 仅为本次安装绕过缓存重新下载。
+    Write-Warn2 "pip 首次安装失败，禁用缓存后重试"
+    & $VenvPy -m pip install --no-cache-dir @Arguments
+    if ($LASTEXITCODE -ne 0) { throw $FailureMessage }
+}
+
 function Test-NvidiaGpu {
     try {
         $cmd = Get-Command nvidia-smi -ErrorAction SilentlyContinue
@@ -115,10 +131,12 @@ function Ensure-Venv {
 function Install-PipPackages {
     param([string]$VenvPy)
     Write-Step "升级 pip 并安装 requirements.txt"
-    & $VenvPy -m pip install -U pip setuptools wheel
-    if ($LASTEXITCODE -ne 0) { throw "pip 升级失败" }
-    & $VenvPy -m pip install -r (Join-Path $Root "requirements.txt")
-    if ($LASTEXITCODE -ne 0) { throw "requirements 安装失败" }
+    Install-PipWithRetry -VenvPy $VenvPy `
+        -Arguments @("-U", "pip", "setuptools", "wheel") `
+        -FailureMessage "pip 升级失败"
+    Install-PipWithRetry -VenvPy $VenvPy `
+        -Arguments @("-r", (Join-Path $Root "requirements.txt")) `
+        -FailureMessage "requirements 安装失败"
     Write-Ok "基础依赖已安装"
 }
 
@@ -143,25 +161,28 @@ function Install-Paddle {
         if ($LASTEXITCODE -eq 0) {
             Write-Ok "已有匹配的 Paddle GPU 3.3.1 / CUDA 12.9"
         } else {
-            & $VenvPy -m pip install --upgrade --force-reinstall "paddlepaddle-gpu==3.3.1" $numpyRequirement -i $idx
-        }
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warn2 "GPU 版安装失败，回退 CPU 版"
-            & $VenvPy -m pip uninstall -y paddlepaddle-gpu 2>$null
-            & $VenvPy -m pip install "paddlepaddle==3.3.1" $numpyRequirement -i "https://www.paddlepaddle.org.cn/packages/stable/cpu/"
+            try {
+                Install-PipWithRetry -VenvPy $VenvPy `
+                    -Arguments @("--upgrade", "--force-reinstall", "paddlepaddle-gpu==3.3.1", $numpyRequirement, "-i", $idx) `
+                    -FailureMessage "GPU 版 Paddle 安装失败"
+            } catch {
+                Write-Warn2 "GPU 版安装失败，回退 CPU 版"
+                & $VenvPy -m pip uninstall -y paddlepaddle-gpu 2>$null
+                Install-PipWithRetry -VenvPy $VenvPy `
+                    -Arguments @("paddlepaddle==3.3.1", $numpyRequirement, "-i", "https://www.paddlepaddle.org.cn/packages/stable/cpu/") `
+                    -FailureMessage "CPU 版 Paddle 安装失败"
+            }
         }
     } else {
         & $VenvPy -m pip uninstall -y paddlepaddle-gpu 2>$null
-        & $VenvPy -m pip install "paddlepaddle==3.3.1" $numpyRequirement -i "https://www.paddlepaddle.org.cn/packages/stable/cpu/"
-    }
-    if ($LASTEXITCODE -ne 0) {
-        throw "Paddle 安装失败，请查看上方 pip 输出"
+        Install-PipWithRetry -VenvPy $VenvPy `
+            -Arguments @("paddlepaddle==3.3.1", $numpyRequirement, "-i", "https://www.paddlepaddle.org.cn/packages/stable/cpu/") `
+            -FailureMessage "CPU 版 Paddle 安装失败"
     }
     # 已有 Paddle 符合版本时也要修复旧安装留下的 NumPy 2.4+。
-    & $VenvPy -m pip install $numpyRequirement
-    if ($LASTEXITCODE -ne 0) {
-        throw "NumPy 兼容版本安装失败，请查看上方 pip 输出"
-    }
+    Install-PipWithRetry -VenvPy $VenvPy `
+        -Arguments @($numpyRequirement) `
+        -FailureMessage "NumPy 兼容版本安装失败"
     Write-Ok "Paddle 安装步骤完成"
 }
 

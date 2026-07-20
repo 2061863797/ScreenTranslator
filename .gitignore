@@ -9,7 +9,8 @@ runtime/llama/
 runtime/paddlex.zip
 runtime/models.zip
 runtime/llama.zip
-# OCR 模型仍保留在仓库中，Release 另提供 paddlex 压缩包；缓存与临时目录忽略
+# PaddleX 程序代码保留在仓库中；OCR 官方模型仅由 Release paddlex 压缩包提供
+runtime/paddlex/official_models/
 runtime/paddlex/func_ret/
 runtime/paddlex/locks/
 runtime/paddlex/temp/

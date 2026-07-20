@@ -7,7 +7,7 @@
   来源（官方）：
   - 翻译模型 GGUF: https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF
   - llama-server:  https://github.com/ggml-org/llama.cpp/releases
-  - OCR 模型:      源码已带 runtime/paddlex/official_models；-WarmOcr 可补拉/校验
+  - OCR 模型:      Release 完整 runtime 包已带；-WarmOcr 可从官方来源补拉/校验
                    项目说明 https://github.com/PaddlePaddle/PaddleOCR
 
   用法（在项目根）：
@@ -295,7 +295,7 @@ print('ocr cache ready', pdx)
     }
 } else {
     Write-Host ""
-    Write-Host "  OCR: 源码应已带 runtime\paddlex\official_models；缺则 -WarmOcr 或首次截屏补拉"
+    Write-Host "  OCR: Release 完整 runtime 包应已带；缺少时可用 -WarmOcr 补拉"
     Write-Host "       说明: https://github.com/PaddlePaddle/PaddleOCR"
 }
 
@@ -303,9 +303,9 @@ Write-Step "完成"
 Write-Host @"
 
   目录:
-    runtime\models\   HY-MT *.gguf     （Release models 包 / 本脚本）
-    runtime\llama\    llama-server + DLL（Release llama 包 / 本脚本）
-    runtime\paddlex\  OCR（随源码；可选 -WarmOcr）
+    runtime\models\   HY-MT *.gguf      （Release runtime 包 / 本脚本）
+    runtime\llama\    llama-server + DLL（Release runtime 包 / 本脚本）
+    runtime\paddlex\  OCR               （Release runtime 包 / 可选 -WarmOcr）
 
   官方地址:
     模型  https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF

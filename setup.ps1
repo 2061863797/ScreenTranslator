@@ -10,7 +10,7 @@
     .\setup.ps1 -CpuOnly        # 强制 CPU
     .\setup.ps1 -Gpu            # 强制 GPU 版 Paddle
     .\setup.ps1 -SkipPaddle       # 跳过 Paddle
-    .\setup.ps1 -BuildLauncher    # 重建 翻译.exe
+    .\setup.ps1 -BuildLauncher    # 强制重建 翻译.exe（普通安装缺少时会自动生成）
     .\setup.ps1 -DownloadRuntime  # 顺带下载模型/llama（见 scripts\download_runtime.ps1）
 #>
 
@@ -315,7 +315,7 @@ function Test-Runtime {
     }
 
     if (-not $ok) {
-        Write-Warn2 "runtime 不齐：请把 Releases 的 models、llama 两个包解压到 runtime 目录（OCR 随源码；也可用 -DownloadRuntime）。"
+        Write-Warn2 "runtime 不齐：请把 Releases 的完整 runtime 压缩包解压到项目根目录（也可用 -DownloadRuntime）。"
     }
     return $ok
 }
@@ -337,20 +337,34 @@ function Test-Imports {
 
 function Invoke-BuildLauncher {
     param([string]$VenvPy)
-    Write-Step "重建 翻译.exe"
+    Write-Step "生成 翻译.exe"
+    & $VenvPy -c "import PyInstaller" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Install-PipWithRetry `
+            -VenvPy $VenvPy `
+            -Arguments @("pyinstaller") `
+            -FailureMessage "PyInstaller 安装失败"
+    }
     $build = Join-Path $Root "build.ps1"
     if (Test-Path -LiteralPath $build) {
         & $build
-        return
+    } else {
+        & $VenvPy -m PyInstaller --noconfirm --onefile --windowed `
+            --name "翻译" `
+            --icon (Join-Path $Root "icon.ico") `
+            --distpath $Root `
+            --workpath (Join-Path $Root "build") `
+            --specpath $Root `
+            (Join-Path $Root "launcher.py")
+        if ($LASTEXITCODE -ne 0) {
+            throw "翻译.exe 生成失败"
+        }
     }
-    & $VenvPy -m pip install pyinstaller
-    & $VenvPy -m PyInstaller --noconfirm --onefile --windowed `
-        --name "翻译" `
-        --icon (Join-Path $Root "icon.ico") `
-        --distpath $Root `
-        --workpath (Join-Path $Root "build") `
-        --specpath $Root `
-        (Join-Path $Root "launcher.py")
+    $launcherExe = Join-Path $Root "翻译.exe"
+    if (-not (Test-Path -LiteralPath $launcherExe)) {
+        throw "翻译.exe 生成结束后仍未找到：$launcherExe"
+    }
+    Write-Ok "启动器已生成: $launcherExe"
 }
 
 # ---------------- main ----------------
@@ -397,6 +411,12 @@ if ($Check) {
         Write-Err2 "尚未创建 venv，完整安装请运行: .\setup.ps1"
         $checkOk = $false
     }
+    $launcherExe = Join-Path $Root "翻译.exe"
+    if (Test-Path -LiteralPath $launcherExe) {
+        Write-Ok "启动器: $launcherExe"
+    } else {
+        Write-Warn2 "缺少 翻译.exe；可运行 .\setup.ps1 -BuildLauncher 生成，或直接用 pythonw 启动"
+    }
     Write-Host ""
     if ($checkOk) {
         Write-Ok "体检结束"
@@ -440,8 +460,11 @@ if ($DownloadRuntime) {
     }
 }
 
-if ($BuildLauncher) {
+$launcherExe = Join-Path $Root "翻译.exe"
+if ($BuildLauncher -or -not (Test-Path -LiteralPath $launcherExe)) {
     Invoke-BuildLauncher -VenvPy $venvPy
+} else {
+    Write-Ok "启动器已存在: $launcherExe"
 }
 
 Write-Step "完成"
@@ -450,7 +473,7 @@ Write-Host '  启动: 双击 翻译.exe  或  venv\Scripts\pythonw.exe run.py'
 Write-Host "  检查: .\setup.ps1 -Check"
 Write-Host "  仅CPU: .\setup.ps1 -CpuOnly"
 Write-Host '  下载资源: .\scripts\download_runtime.ps1  或  .\setup.ps1 -DownloadRuntime'
-Write-Host '  说明: models/llama 用 Release 两包或脚本下载；paddlex 随源码；venv 每机跑本脚本'
+Write-Host '  说明: runtime 使用 Release 完整压缩包或脚本下载；venv 需在每台电脑运行本脚本生成'
 Write-Host ""
 
 if (-not $runtimeOk) { exit 2 }

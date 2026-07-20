@@ -16,10 +16,9 @@ Windows 本地截屏翻译工具：支持截屏、划词、窗口持续翻译、
 
 | 内容 | 来源 | 放置位置 |
 |------|------|----------|
-| 程序源码、PaddleX OCR 模型 | 源码包 | `app\`、`runtime\paddlex\` |
-| HY-MT 翻译模型 | Releases 的 **models** 附件 | `runtime\models\` |
-| llama-server（CUDA 版） | Releases 的 **llama** 附件 | `runtime\llama\` |
-| Python 环境和本机配置 | 运行 `setup.ps1` 后生成 | `venv\`、`config.json` |
+| 程序源码 | 源码包 | `app\`、`run.py`、安装脚本等 |
+| OCR、翻译模型和 CUDA llama-server | Releases 的完整 **runtime** 附件 | `runtime\` |
+| Python 环境、本机配置和便捷启动器 | 运行 `setup.ps1` 后生成 | `venv\`、`config.json`、`翻译.exe` |
 
 `翻译.exe` 是便捷启动器，不是包含全部依赖的单文件程序；它仍需要同目录下的 `venv`、`app`、`run.py` 和 `runtime`。
 
@@ -29,7 +28,7 @@ Windows 本地截屏翻译工具：支持截屏、划词、窗口持续翻译、
 
 - Windows 10/11 64 位；
 - Python 3.11、3.12 或 3.13，推荐 **Python 3.12**，不要使用 3.14；
-- 至少约 5 GB 可用磁盘空间；
+- 至少约 12 GB 可用磁盘空间，首次安装建议预留 15 GB；
 - 首次安装 Python 依赖时可以联网。
 
 ## 快速开始
@@ -42,13 +41,13 @@ Windows 本地截屏翻译工具：支持截屏、划词、窗口持续翻译、
 
 - NVIDIA 显卡，`nvidia-smi` 可以正常运行，驱动能够使用 CUDA 13；
 
-Releases 中的 `llama` 附件就是本项目当前使用的 NVIDIA CUDA 13 版本，所需 CUDA 运行库 DLL 已包含在附件中，不需要另外安装 CUDA Toolkit。
+完整 **runtime** 附件中的 `runtime\llama` 是本项目当前使用的 NVIDIA CUDA 13 版本，所需 CUDA 运行库 DLL 已包含在附件中，不需要另外安装 CUDA Toolkit。
 
 #### 1. 准备文件
 
-1. 下载并解压源码包。源码包已经包含 `runtime\paddlex\official_models`。
-2. 在 Releases 下载 **models**、**llama** 两个附件。
-3. 把两个附件都解压到项目的 `runtime\` 目录：**models** 解压后形成 `runtime\models\`，**llama** 解压后形成 `runtime\llama\`。
+1. 下载并解压源码包。
+2. 在 Releases 下载完整的 **runtime** 压缩包。
+3. 把 **runtime** 压缩包解压到项目根目录，也就是与 `run.py` 同级的位置。压缩包内第一层应为 `runtime\`；如果提示合并或替换同名文件，请允许替换。
 
 最终目录应为：
 
@@ -81,14 +80,7 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 .\setup.ps1 -Check
 ```
 
-浏览器下载的压缩包可能带有“来自互联网”标记，`RemoteSigned` 仍会拦截其中未签名的脚本。也可以在解压前打开压缩包“属性”并勾选“解除锁定”；如果已经解压，可执行：
-
-```powershell
-Unblock-File .\setup.ps1
-Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
-```
-
-`setup.ps1` 会创建 `venv`、安装依赖、检查依赖冲突、生成本机 `config.json`，并自动选择 GPU 配置。
+`setup.ps1` 会创建 `venv`、安装依赖、检查依赖冲突、生成本机 `config.json`、自动选择 GPU 配置，并在缺少时生成 `翻译.exe`。
 
 #### 3. 启动
 
@@ -102,31 +94,32 @@ venv\Scripts\pythonw.exe run.py
 
 | 情况 | 处理方式 |
 |------|----------|
-| 没有 NVIDIA 显卡 | 使用下面的 CPU 安装命令；不要使用 Releases 中默认的 CUDA `llama` 附件 |
+| 没有 NVIDIA 显卡 | 保留完整 runtime 中的模型和 OCR，并按下面命令把 CUDA llama 替换为 CPU 版 |
 | NVIDIA 驱动或 CUDA 版 llama 无法启动 | 改用 CPU 模式和 CPU 版 llama |
-| 没有 Releases 附件 | 让脚本从官方来源下载缺失的模型和 llama |
+| 没有完整 runtime 附件 | 让脚本从官方来源下载缺失的运行资源 |
 | 没有 Python，或只有 Python 3.14 | 安装 Python 3.12 后重新执行安装 |
 | 安装了多个 Python | 用 `-Python` 指定 Python 3.11～3.13 的完整路径 |
 
 #### 无 NVIDIA：CPU 一键安装
 
-只需源码包即可执行；如果已经有 Releases 的 `models` 附件，脚本会保留并跳过重复下载。
+先按路线 A 解压源码包和完整 **runtime** 附件，再把其中的 CUDA llama 替换为 CPU 版：
+
+```powershell
+.\scripts\download_runtime.ps1 -CpuOnly -SkipModel -Force
+.\setup.ps1 -CpuOnly
+.\setup.ps1 -Check
+```
+
+CPU 模式可以使用，但 OCR 和翻译速度会明显慢于 NVIDIA GPU。
+
+如果没有完整 **runtime** 附件，也可以尝试由脚本下载所需资源：
 
 ```powershell
 .\setup.ps1 -CpuOnly -DownloadRuntime
 .\setup.ps1 -Check
 ```
 
-CPU 模式可以使用，但 OCR 和翻译速度会明显慢于 NVIDIA GPU。
-
-如果已经解压过默认 CUDA `llama`，需要先用 CPU 版本替换它：
-
-```powershell
-.\scripts\download_runtime.ps1 -CpuOnly -SkipModel -Force
-.\setup.ps1 -CpuOnly
-```
-
-#### 有 NVIDIA，但没有 Releases 附件
+#### 有 NVIDIA，但没有完整 runtime 附件
 
 ```powershell
 .\setup.ps1 -DownloadRuntime
@@ -188,11 +181,19 @@ winget install Python.Python.3.12
 
 | 现象 | 处理 |
 |------|------|
-| 缺少翻译模型或 llama-server | 解压 Releases 的 **models**、**llama** 两个附件，或运行 `.\setup.ps1 -DownloadRuntime` |
+| runtime 资源缺失 | 把 Releases 的完整 **runtime** 压缩包解压到项目根目录，或运行 `.\setup.ps1 -DownloadRuntime` |
 | Paddle 安装失败 | 使用 Python 3.12；仍失败可尝试 `.\setup.ps1 -CpuOnly` |
 | GPU/llama 启动失败 | 更新 NVIDIA 驱动，或切换 CPU 路线 |
+| 安装后没有 `翻译.exe` | 运行 `.\setup.ps1 -BuildLauncher` 强制生成；也可直接运行 `venv\Scripts\pythonw.exe run.py` |
 | 提示程序已在运行 | 检查系统托盘，程序只允许一个实例 |
 | 想确认资源是否齐全 | 运行 `.\setup.ps1 -Check` |
+
+如果不想使用快速开始中的 `Set-ExecutionPolicy -Scope Process Bypass`，也可以解除本项目脚本的“来自互联网”标记。两种方法任选一种，不需要重复执行。可以在解压前打开压缩包“属性”并勾选“解除锁定”；如果已经解压，则在项目根目录执行：
+
+```powershell
+Unblock-File .\setup.ps1
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+```
 
 日志位置：`app.log`。详细设置说明见设置页面和 [SETTINGS.en.md](./SETTINGS.en.md)。
 

@@ -4,19 +4,19 @@ The `runtime` directory has three parts:
 
 | Folder | Supplied by | Content |
 |--------|-------------|---------|
-| `paddlex\official_models\` | Source package | PaddleOCR detection and recognition models |
-| `models\` | Release **models** asset | HY-MT GGUF translation model |
-| `llama\` | Release **llama** asset | `llama-server.exe` and its DLLs |
+| `paddlex\official_models\` | Complete Release **runtime** asset | PaddleOCR detection and recognition models |
+| `models\` | Complete Release **runtime** asset | HY-MT GGUF translation model |
+| `llama\` | Complete Release **runtime** asset | `llama-server.exe` and its DLLs |
 
 `config.json` and `venv` are generated locally on each PC and are not runtime Release assets.
 
 ## Default Release setup
 
-Releases provide only the **models** and **llama** assets. The PaddleX OCR models already ship with the source package and do not need a separate download.
+Releases provide one complete **runtime** archive containing the PaddleX OCR models, HY-MT translation model, and llama-server.
 
-The current `llama` asset is the NVIDIA CUDA 13 build. It is intended for an NVIDIA GPU with a recent working driver. CUDA runtime DLLs are included; installing the CUDA Toolkit separately is not required.
+The `runtime\llama` directory in the complete asset is the NVIDIA CUDA 13 build. It is intended for an NVIDIA GPU with a recent working driver. CUDA runtime DLLs are included; installing the CUDA Toolkit separately is not required.
 
-After extracting both the **models** and **llama** assets into the current `runtime\` directory, the layout must be:
+The archive's top-level folder must be `runtime\`. Extract it into the project root and allow your archive tool to merge or replace files; the resulting layout must be:
 
 ```text
 runtime\models\HY-MT1.5-1.8B-Q4_K_M.gguf
@@ -38,22 +38,22 @@ Check the assets with:
 
 The settings list accepts only files with a valid GGUF header. A custom model must still be compatible with the bundled `llama.cpp`; verify its translation behavior, prompt format, license, and hardware requirements yourself.
 
-## CPU setup or missing Release assets
+## CPU setup or missing complete runtime asset
 
-Without an NVIDIA GPU, download and use the CPU llama build:
-
-```powershell
-.\setup.ps1 -CpuOnly -DownloadRuntime
-```
-
-If the default CUDA llama asset was already extracted, replace it with the CPU build:
+Without an NVIDIA GPU, if the complete **runtime** asset is already extracted, keep its model and OCR files and replace the CUDA llama with the CPU build:
 
 ```powershell
 .\scripts\download_runtime.ps1 -CpuOnly -SkipModel -Force
 .\setup.ps1 -CpuOnly
 ```
 
-With NVIDIA but without the Release assets:
+If the complete **runtime** asset is unavailable, you can instead let the script download the required files:
+
+```powershell
+.\setup.ps1 -CpuOnly -DownloadRuntime
+```
+
+With NVIDIA but without the complete **runtime** asset:
 
 ```powershell
 .\setup.ps1 -DownloadRuntime

@@ -4,19 +4,19 @@
 
 | 目录 | 来源 | 内容 |
 |------|------|------|
-| `paddlex\official_models\` | 源码包自带 | PaddleOCR 检测和识别模型 |
-| `models\` | Releases 的 **models** 附件 | HY-MT GGUF 翻译模型 |
-| `llama\` | Releases 的 **llama** 附件 | `llama-server.exe` 及依赖 DLL |
+| `paddlex\official_models\` | Releases 的完整 **runtime** 附件 | PaddleOCR 检测和识别模型 |
+| `models\` | Releases 的完整 **runtime** 附件 | HY-MT GGUF 翻译模型 |
+| `llama\` | Releases 的完整 **runtime** 附件 | `llama-server.exe` 及依赖 DLL |
 
 `config.json` 和 `venv` 由每台电脑在本机生成，不属于 runtime 发布附件。
 
 ## 默认 Release 方案
 
-Releases 只提供 **models**、**llama** 两个附件；PaddleX OCR 模型已经包含在源码包中，不需要重复下载。
+Releases 提供一个完整的 **runtime** 压缩包，其中同时包含 PaddleX OCR 模型、HY-MT 翻译模型和 llama-server。
 
-当前 `llama` 附件是 NVIDIA CUDA 13 版本，适合 NVIDIA 显卡和可正常工作的较新驱动。附件已包含 CUDA 运行库 DLL，无需另装 CUDA Toolkit。
+完整附件中的 `runtime\llama` 是 NVIDIA CUDA 13 版本，适合 NVIDIA 显卡和可正常工作的较新驱动。附件已包含 CUDA 运行库 DLL，无需另装 CUDA Toolkit。
 
-把 **models**、**llama** 两个附件都解压到当前 `runtime\` 目录后，应得到：
+压缩包内第一层应为 `runtime\`。把它解压到项目根目录并允许合并或替换同名文件后，应得到：
 
 ```text
 runtime\models\HY-MT1.5-1.8B-Q4_K_M.gguf
@@ -38,22 +38,22 @@ runtime\paddlex\official_models\PP-OCRv6_medium_rec\
 
 设置列表只识别文件头有效的 GGUF。自定义模型仍需兼容当前 `llama.cpp`，并自行确认翻译能力、提示格式、许可和硬件需求。
 
-## CPU 或缺少 Release 附件
+## CPU 或缺少完整 runtime 附件
 
-没有 NVIDIA 显卡时，使用 CPU 版 llama：
-
-```powershell
-.\setup.ps1 -CpuOnly -DownloadRuntime
-```
-
-已经解压过默认 CUDA llama 时，可用 CPU 包替换：
+没有 NVIDIA 显卡但已经解压完整 **runtime** 附件时，保留其中的模型和 OCR，并把 CUDA llama 替换为 CPU 版：
 
 ```powershell
 .\scripts\download_runtime.ps1 -CpuOnly -SkipModel -Force
 .\setup.ps1 -CpuOnly
 ```
 
-有 NVIDIA 但缺少 Release 附件时：
+没有完整 **runtime** 附件时，也可以尝试由脚本下载所需资源：
+
+```powershell
+.\setup.ps1 -CpuOnly -DownloadRuntime
+```
+
+有 NVIDIA 但缺少完整 **runtime** 附件时：
 
 ```powershell
 .\setup.ps1 -DownloadRuntime

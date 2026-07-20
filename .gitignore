@@ -3,10 +3,13 @@ venv/
 .venv/
 config.json
 
-# —— runtime 大文件（模型 / llama 用 GitHub Release 压缩包分发）——
+# —— runtime 大文件与本机生成的 Release 附件 ——
 runtime/models/
 runtime/llama/
-# OCR 模型 runtime/paddlex/official_models 进仓库；缓存与临时目录仍忽略
+runtime/paddlex.zip
+runtime/models.zip
+runtime/llama.zip
+# OCR 模型仍保留在仓库中，Release 另提供 paddlex 压缩包；缓存与临时目录忽略
 runtime/paddlex/func_ret/
 runtime/paddlex/locks/
 runtime/paddlex/temp/

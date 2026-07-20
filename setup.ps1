@@ -315,7 +315,7 @@ function Test-Runtime {
     }
 
     if (-not $ok) {
-        Write-Warn2 "runtime 不齐：请把 Releases 的完整 runtime 压缩包解压到项目根目录（也可用 -DownloadRuntime）。"
+        Write-Warn2 "runtime 不齐：请把 Releases 的 paddlex、models、llama 三个压缩包解压到 runtime 目录（也可用 -DownloadRuntime）。"
     }
     return $ok
 }
@@ -473,7 +473,7 @@ Write-Host '  启动: 双击 翻译.exe  或  venv\Scripts\pythonw.exe run.py'
 Write-Host "  检查: .\setup.ps1 -Check"
 Write-Host "  仅CPU: .\setup.ps1 -CpuOnly"
 Write-Host '  下载资源: .\scripts\download_runtime.ps1  或  .\setup.ps1 -DownloadRuntime'
-Write-Host '  说明: runtime 使用 Release 完整压缩包或脚本下载；venv 需在每台电脑运行本脚本生成'
+Write-Host '  说明: paddlex/models/llama 使用 Release 三个压缩包或脚本下载；venv 需在每台电脑运行本脚本生成'
 Write-Host ""
 
 if (-not $runtimeOk) { exit 2 }

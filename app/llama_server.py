@@ -47,12 +47,24 @@ class LlamaServer:
         self._proc: subprocess.Popen | None = None
         self._recent_output: deque[str] = deque(maxlen=30)
         self._output_thread: threading.Thread | None = None
+        self._cuda_available: bool | None = None
         # 启动时预热与首次翻译可能并发调用 start，串行化避免重复拉起进程
         self._lock = threading.Lock()
+        # stop() 先设置事件，再等待锁；这样可以中断持锁的冷启动循环。
+        self._stop_requested = threading.Event()
 
     @property
     def base_url(self) -> str:
         return f"http://{self.host}:{self.port}"
+
+    @property
+    def actual_device(self) -> str:
+        configured = str(self._cfg.get("llama_device", "auto")).lower()
+        if configured == "cpu" or self._cuda_available is False:
+            return "CPU"
+        if self._cuda_available is True:
+            return "GPU (CUDA)"
+        return configured.upper()
 
     def is_healthy(self, timeout: float = 2.0) -> bool:
         try:
@@ -99,10 +111,44 @@ class LlamaServer:
             self._output_thread.join(timeout=0.5)
             self._output_thread = None
 
+    def _has_cuda_device(self, exe: Path) -> bool:
+        """询问当前 llama 包是否实际发现 CUDA 设备，结果在进程周期内缓存。"""
+        if self._cuda_available is not None:
+            return self._cuda_available
+        try:
+            probe = subprocess.run(
+                [str(exe), "--list-devices"],
+                cwd=str(self.llama_dir),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                check=False,
+            )
+            output = f"{probe.stdout}\n{probe.stderr}".upper()
+            self._cuda_available = probe.returncode == 0 and "CUDA" in output
+        except (OSError, subprocess.SubprocessError):
+            self._cuda_available = False
+        return self._cuda_available
+
+    def _gpu_layers(self, exe: Path) -> int:
+        device = str(self._cfg.get("llama_device", "auto")).strip().lower()
+        if device == "cpu":
+            return 0
+        has_cuda = self._has_cuda_device(exe)
+        if device == "gpu" and not has_cuda:
+            raise RuntimeError("已选择 GPU，但当前 llama-server 未检测到可用的 CUDA 设备")
+        if device == "auto" and not has_cuda:
+            return 0
+        requested = int(self._cfg.get("n_gpu_layers", 99))
+        return requested if requested > 0 else 99
+
     def _build_cmd(self, exe: Path) -> list[str]:
         """按配置拼 llama-server 参数（翻译场景默认偏快、省显存）。"""
         cfg = self._cfg
-        ngl = int(cfg.get("n_gpu_layers", 99))
+        ngl = self._gpu_layers(exe)
         threads = int(cfg.get("threads", 8))
         ctx = int(cfg.get("ctx_size", 2048))
         batch = int(cfg.get("batch_size", 512))
@@ -148,6 +194,8 @@ class LlamaServer:
         冷启动加载模型可能较久，默认最多等 180 秒。
         """
         with self._lock:
+            if self._stop_requested.is_set():
+                raise InterruptedError("llama-server 启动已取消")
             if self.is_healthy():
                 _log.info("复用已有健康实例 %s", self.base_url)
                 return
@@ -165,9 +213,10 @@ class LlamaServer:
 
             cmd = self._build_cmd(exe)
             _log.info(
-                "启动 llama-server port=%s ngl=%s ctx=%s batch=%s/%s np=%s mlock=%s ctk=%s model=%s",
+                "启动 llama-server port=%s device=%s ngl=%s ctx=%s batch=%s/%s np=%s mlock=%s ctk=%s model=%s",
                 self.port,
-                self._cfg.get("n_gpu_layers"),
+                self._cfg.get("llama_device", "auto"),
+                cmd[cmd.index("-ngl") + 1],
                 self._cfg.get("ctx_size"),
                 self._cfg.get("batch_size"),
                 self._cfg.get("ubatch_size"),
@@ -198,6 +247,10 @@ class LlamaServer:
             self._output_thread.start()
             deadline = time.time() + wait_seconds
             while time.time() < deadline:
+                if self._stop_requested.is_set():
+                    _log.info("llama-server 启动被退出流程取消")
+                    self._terminate_process_locked()
+                    raise InterruptedError("llama-server 启动已取消")
                 if self.is_healthy():
                     _log.info(
                         "llama-server 就绪 pid=%s base=%s",
@@ -217,13 +270,14 @@ class LlamaServer:
                         f"llama-server 启动后立即退出（返回码 {code}），"
                         f"{detail or '没有可用的服务端输出'}"
                     )
-                time.sleep(0.5)
+                self._stop_requested.wait(0.5)
             _log.error("llama-server %s 秒内未就绪", wait_seconds)
             self._terminate_process_locked()
             raise TimeoutError(f"llama-server 在 {wait_seconds} 秒内未就绪")
 
     def stop(self) -> None:
         """仅关闭本程序拉起的进程，不影响用户自己启动的实例。"""
+        self._stop_requested.set()
         with self._lock:
             if self._proc is not None:
                 _log.info("停止本程序拉起的 llama-server pid=%s", self._proc.pid)

@@ -3,15 +3,18 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import QCoreApplication, QLibraryInfo, QTranslator
+
 _lang = "zh"
+_qt_translator: QTranslator | None = None
 
 # 合并：设置窗 + 托盘 + 主界面浮层/对话框
 _STRINGS: dict[str, dict[str, str]] = {
     "zh": {
         # settings (same keys as before)
-        "win_title": "设置",
-        "title": "设置",
-        "subtitle": "ScreenTranslator · 本地离线",
+        "win_title": "本地屏译 - 设置",
+        "title": "本地屏译设置",
+        "subtitle": "OCR 与翻译均在本机运行",
         "close": "关闭",
         "save": "保存设置",
         "nav_general": "常规",
@@ -24,6 +27,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ui_lang_hint": "托盘、设置、历史、浮层控制条等全部界面；保存后立即切换。",
         "card_general": "常规",
         "card_general_hint": "全局默认目标语言；源语言自动识别。翻译结果窗内也可临时切换。",
+        "runtime_status": "运行状态",
+        "runtime_pending": "加载中",
+        "runtime_ok": "已就绪",
+        "runtime_fail": "加载失败",
+        "runtime_retry": "重试失败项",
+        "runtime_ocr": "OCR",
+        "runtime_llama": "翻译模型",
         "target_lang": "目标语言",
         "translate_font_size": "翻译窗口字号",
         "font_size_default": "默认",
@@ -38,6 +48,11 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ann_color_preview": "当前颜色预览",
         "ann_color_dlg": "备注译文颜色",
         "ann_color_note": "备注译文颜色对窗口/区域备注模式均生效，保存后立即应用。",
+        "ann_capture_visible": "备注译文出现在系统截屏 / 录屏中",
+        "ann_capture_visible_tip": (
+            "开启后录屏和系统截图能拍到备注译文，但区域备注每帧需要额外还原底图，"
+            "响应稍慢；默认关闭以获得最快速度。保存后立即生效。"
+        ),
         "card_hotkeys": "全局热键",
         "card_hotkeys_hint": (
             "点击输入框后：键盘组合键（需含 Ctrl/Alt/Shift，Esc 取消）；"
@@ -45,7 +60,6 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
         "hk_shot": "截屏翻译",
         "hk_word": "划词翻译",
-        "hk_ocr": "截图取字",
         "hk_win": "窗口持续",
         "hk_region": "区域实时",
         "hk_win_full": "窗口持续翻译",
@@ -53,6 +67,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "card_window": "窗口持续翻译",
         "card_window_hint": "字幕条显示在目标窗口外侧不遮挡；备注按行贴在原文旁。",
         "interval": "监视间隔",
+        "interval_custom": "自定义…",
         "display_mode": "显示模式",
         "ms_suffix": " 毫秒",
         "mode_sub_win": "字幕条（整段译，窗口外侧不遮挡）",
@@ -75,12 +90,20 @@ _STRINGS: dict[str, dict[str, str]] = {
         "model_file": "翻译模型",
         "model_file_tip": "只列出 {directory} 顶层且文件头有效的 .gguf 文件",
         "model_file_note": "请自行下载兼容 llama.cpp 的 GGUF，直接放入 {directory}；重新打开设置可刷新列表，保存后重启软件生效。",
+        "llama_device": "翻译设备",
+        "llama_device_auto": "自动（推荐）",
+        "llama_device_gpu": "GPU（NVIDIA CUDA）",
+        "llama_device_cpu": "CPU",
+        "llama_device_tip": "同一个 llama 包支持 CPU/GPU；自动模式检测不到 CUDA 时使用 CPU，切换后需重启软件。",
         "model_none": "未找到可用的 .gguf 模型",
         "model_current_external": "{name}（当前为外部路径）",
         "model_current_missing": "{name}（当前文件不可用）",
         "model_invalid_title": "模型文件不可用",
         "model_invalid_body": "文件不存在、不是 .gguf，或文件头无效：\n{path}",
         "max_tokens_tip": "选择常用值或手动输入 64–8192；过小可能截断，过大略增延迟",
+        "max_tokens_custom": "自定义…",
+        "max_tokens_recommended": "512（推荐）",
+        "max_tokens_presets": "选择预设 ▼",
         "max_tokens_invalid_title": "max_tokens 无效",
         "max_tokens_invalid_body": "请选择或输入 64–8192 之间的整数。",
         "card_log": "运行日志",
@@ -94,24 +117,22 @@ _STRINGS: dict[str, dict[str, str]] = {
         "hk_conflict_title": "热键冲突",
         "hk_conflict_body": "以下热键重复，请修改后再保存：\n\n{list}",
         "saved_toast": "设置已保存",
-        "saved_restart_toast": "设置已保存；重启软件后切换翻译模型",
+        "saved_restart_toast": "设置已保存；重启软件后切换翻译模型或设备",
         "lang_zh": "中文",
         "lang_en": "English",
         # tray
-        "app_name": "翻译",
+        "app_name": "本地屏译",
         "tray_history": "翻译历史…",
         "tray_settings": "设置…",
         "tray_open_log": "打开日志…",
         "tray_quit": "退出",
-        "tray_tip": "翻译  截屏 {shot} | 划词 {word} | 窗口 {win} | 区域 {reg} | 取字 {ocr}",
+        "tray_tip": "本地屏译  截屏 {shot} | 划词 {word} | 窗口 {win} | 区域 {reg}",
         # messages
         "msg_wait_model": "翻译模型正在加载，请就绪后重试。",
         "msg_server_fail": "翻译服务启动失败",
         "msg_preload_fail": "翻译：{name}加载失败",
         "msg_name_llama": "翻译模型",
         "msg_name_ocr": "OCR",
-        "msg_ocr_copied": "已复制到剪贴板：\n{text}",
-        "msg_ocr_title": "截图取字",
         "msg_word_empty": "未获取到选中文本",
         "msg_word_title": "划词翻译",
         "msg_error": "翻译：出错",
@@ -130,6 +151,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "sub_free": "自由",
         "sub_pinned": "固定",
         "sub_annotate": "备注",
+        "sub_pause": "暂停",
+        "sub_resume": "继续",
         "sub_close": "关闭",
         "sub_close_tip": "停止持续翻译并关闭字幕",
         "sub_annotate_tip": "切换为备注模式（贴在原文旁）",
@@ -152,6 +175,11 @@ _STRINGS: dict[str, dict[str, str]] = {
         "hist_tip": "双击一行可在翻译窗口中打开",
         "hist_clear": "清空历史",
         "hist_clear_confirm": "确定永久清空全部翻译历史吗？",
+        "hist_search": "搜索原文或译文…",
+        "hist_copy_src": "复制原文",
+        "hist_copy_dst": "复制译文",
+        "hist_delete": "删除所选",
+        "hist_delete_confirm": "确定删除所选历史记录吗？",
         # picker
         "pick_title": "选择要翻译的窗口",
         "pick_hint": "请选择要持续翻译的窗口（双击也可）",
@@ -163,8 +191,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "tw_to": "译成：",
         "tw_placeholder": "输入任意语言的文本，或用划词/截屏热键送入…",
         "tw_out_ph": "译文",
+        "tw_source": "原文",
+        "tw_translation": "译文",
         "tw_translate": "翻译",
         "tw_copy": "复制",
+        "tw_copied_source": "原文已复制",
+        "tw_copied_translation": "译文已复制",
         "tw_busy": "翻译中…",
         "tw_fail": "翻译失败：{e}",
         "tw_server_fail": "翻译服务未就绪",
@@ -178,9 +210,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "hk_placeholder": "点击后按快捷键或鼠标侧键…",
     },
     "en": {
-        "win_title": "Settings",
-        "title": "Settings",
-        "subtitle": "ScreenTranslator · Offline local",
+        "win_title": "LocalScreen Translator - Settings",
+        "title": "LocalScreen Translator Settings",
+        "subtitle": "OCR and translation run locally",
         "close": "Close",
         "save": "Save settings",
         "nav_general": "General",
@@ -213,6 +245,13 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Annotation color applies to both window and region modes; "
             "takes effect after Save."
         ),
+        "ann_capture_visible": "Show annotation text in screenshots / recordings",
+        "ann_capture_visible_tip": (
+            "When on, screen recordings and system screenshots capture the "
+            "annotation text, but region annotation restores the background "
+            "every frame and responds slightly slower. Off by default for "
+            "best speed; applies right after Save."
+        ),
         "card_hotkeys": "Global hotkeys",
         "card_hotkeys_hint": (
             "Click a field, then press a keyboard combo (requires Ctrl/Alt/Shift; Esc cancels), "
@@ -220,7 +259,6 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
         "hk_shot": "Screenshot",
         "hk_word": "Selection",
-        "hk_ocr": "OCR only",
         "hk_win": "Window watch",
         "hk_region": "Region watch",
         "hk_win_full": "Window live translate",
@@ -231,6 +269,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "annotation places lines next to source text."
         ),
         "interval": "Poll interval",
+        "interval_custom": "Custom…",
         "display_mode": "Display mode",
         "ms_suffix": " ms",
         "mode_sub_win": "Subtitle (full text, outside window)",
@@ -270,12 +309,27 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Download a llama.cpp-compatible GGUF yourself and place it directly in {directory}. "
             "Reopen Settings to refresh the list; restart the app after saving."
         ),
+        "runtime_status": "Runtime status",
+        "runtime_pending": "Loading",
+        "runtime_ok": "Ready",
+        "runtime_fail": "Failed",
+        "runtime_retry": "Retry failed",
+        "runtime_ocr": "OCR",
+        "runtime_llama": "Translation model",
+        "llama_device": "Translation device",
+        "llama_device_auto": "Auto (recommended)",
+        "llama_device_gpu": "GPU (NVIDIA CUDA)",
+        "llama_device_cpu": "CPU",
+        "llama_device_tip": "The same llama package supports CPU and GPU. Auto uses CPU when CUDA is unavailable; restart after changing this setting.",
         "model_none": "No usable .gguf model found",
         "model_current_external": "{name} (current external path)",
         "model_current_missing": "{name} (current file unavailable)",
         "model_invalid_title": "Model file unavailable",
         "model_invalid_body": "The file is missing, not a .gguf, or has an invalid header:\n{path}",
         "max_tokens_tip": "Choose a preset or enter 64–8192; too small truncates, too large may slow down",
+        "max_tokens_custom": "Custom…",
+        "max_tokens_recommended": "512 (recommended)",
+        "max_tokens_presets": "Presets ▼",
         "max_tokens_invalid_title": "Invalid max_tokens",
         "max_tokens_invalid_body": "Choose or enter an integer from 64 to 8192.",
         "card_log": "Runtime log",
@@ -289,22 +343,20 @@ _STRINGS: dict[str, dict[str, str]] = {
         "hk_conflict_title": "Hotkey conflict",
         "hk_conflict_body": "Duplicate hotkeys; fix before saving:\n\n{list}",
         "saved_toast": "Settings saved",
-        "saved_restart_toast": "Settings saved; restart the app to switch translation models",
+        "saved_restart_toast": "Settings saved; restart the app to switch translation model or device",
         "lang_zh": "中文",
         "lang_en": "English",
-        "app_name": "Translator",
+        "app_name": "LocalScreen Translator",
         "tray_history": "History…",
         "tray_settings": "Settings…",
         "tray_open_log": "Open log…",
         "tray_quit": "Quit",
-        "tray_tip": "Translator  Shot {shot} | Select {word} | Window {win} | Region {reg} | OCR {ocr}",
+        "tray_tip": "LocalScreen Translator  Shot {shot} | Select {word} | Window {win} | Region {reg}",
         "msg_wait_model": "The translation model is loading. Please retry when it is ready.",
         "msg_server_fail": "Failed to start translation service",
         "msg_preload_fail": "Translator: {name} failed to load",
         "msg_name_llama": "translation model",
         "msg_name_ocr": "OCR",
-        "msg_ocr_copied": "Copied to clipboard:\n{text}",
-        "msg_ocr_title": "Screenshot OCR",
         "msg_word_empty": "No selected text",
         "msg_word_title": "Selection translate",
         "msg_error": "Translator: error",
@@ -322,6 +374,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "sub_free": "Free",
         "sub_pinned": "Pin",
         "sub_annotate": "Notes",
+        "sub_pause": "Pause",
+        "sub_resume": "Resume",
         "sub_close": "Close",
         "sub_close_tip": "Stop continuous translate and close subtitle",
         "sub_annotate_tip": "Switch to annotation mode (next to source)",
@@ -343,6 +397,11 @@ _STRINGS: dict[str, dict[str, str]] = {
         "hist_tip": "Double-click a row to open in the translate window",
         "hist_clear": "Clear history",
         "hist_clear_confirm": "Permanently clear all translation history?",
+        "hist_search": "Search source or translation…",
+        "hist_copy_src": "Copy source",
+        "hist_copy_dst": "Copy translation",
+        "hist_delete": "Delete selected",
+        "hist_delete_confirm": "Delete the selected history entry?",
         "pick_title": "Select a window",
         "pick_hint": "Choose a window for continuous translate (double-click works)",
         "pick_refresh": "Refresh",
@@ -352,8 +411,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "tw_to": "To:",
         "tw_placeholder": "Type or paste text, or use selection/screenshot hotkeys…",
         "tw_out_ph": "Translation",
+        "tw_source": "Source",
+        "tw_translation": "Translation",
         "tw_translate": "Translate",
         "tw_copy": "Copy",
+        "tw_copied_source": "Source copied",
+        "tw_copied_translation": "Translation copied",
         "tw_busy": "Translating…",
         "tw_fail": "Failed: {e}",
         "tw_server_fail": "Translation service not ready",
@@ -372,9 +435,27 @@ def normalize_lang(lang: str | None) -> str:
     return "en" if (lang or "").lower().startswith("en") else "zh"
 
 
+def set_qt_language(lang: str | None) -> None:
+    """切换 Qt 标准对话框文案，不改变项目自身的当前语言。"""
+    global _qt_translator
+    app = QCoreApplication.instance()
+    if app is None:
+        return
+    if _qt_translator is not None:
+        app.removeTranslator(_qt_translator)
+        _qt_translator = None
+    if normalize_lang(lang) == "zh":
+        translator = QTranslator(app)
+        translations = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+        if translator.load("qtbase_zh_CN", translations):
+            app.installTranslator(translator)
+            _qt_translator = translator
+
+
 def set_language(lang: str | None) -> str:
     global _lang
     _lang = normalize_lang(lang)
+    set_qt_language(_lang)
     return _lang
 
 

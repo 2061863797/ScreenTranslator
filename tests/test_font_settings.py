@@ -35,7 +35,7 @@ class FontSettingsTests(unittest.TestCase):
                     window._win_font_size.findData(20)
                 )
                 window._reg_font_size.setCurrentIndex(
-                    window._reg_font_size.findData(24)
+                    window._reg_font_size.findData(17)
                 )
                 window._save()
             finally:
@@ -45,9 +45,21 @@ class FontSettingsTests(unittest.TestCase):
 
         self.assertEqual(cfg["translate_window_font_size"], 15)
         self.assertEqual(cfg["window_watch_font_size"], 20)
-        self.assertEqual(cfg["region_watch_font_size"], 24)
+        self.assertEqual(cfg["region_watch_font_size"], 17)
         save_cfg.assert_called_once_with(cfg)
         on_saved.assert_called_once_with()
+
+    def test_settings_only_offer_12_to_20_pixels(self):
+        from app.ui.windows import _font_size_combo
+
+        widget = _font_size_combo()
+        try:
+            self.assertEqual(widget.findData(11), -1)
+            self.assertGreaterEqual(widget.findData(12), 0)
+            self.assertGreaterEqual(widget.findData(20), 0)
+            self.assertEqual(widget.findData(21), -1)
+        finally:
+            widget.deleteLater()
 
     def test_translate_window_applies_and_restores_font_size(self):
         cfg = dict(DEFAULTS)
@@ -76,10 +88,10 @@ class FontSettingsTests(unittest.TestCase):
         subtitle = SubtitleBar()
         annotation = AnnotationOverlay()
         try:
-            subtitle.set_font_size(21)
-            annotation.set_font_size(21)
-            self.assertEqual(subtitle._font.pixelSize(), 21)
-            self.assertEqual(annotation._font_size, 21)
+            subtitle.set_font_size(20)
+            annotation.set_font_size(20)
+            self.assertEqual(subtitle._font.pixelSize(), 20)
+            self.assertEqual(annotation._font_size, 20)
 
             subtitle.set_font_size(0)
             annotation.set_font_size(0)
@@ -96,7 +108,7 @@ class FontSettingsTests(unittest.TestCase):
         app = App.__new__(App)
         app.cfg = {
             "window_watch_font_size": 18,
-            "region_watch_font_size": 26,
+            "region_watch_font_size": 20,
         }
         app._watch_profile = None
         app.subtitle = Mock()
@@ -109,15 +121,15 @@ class FontSettingsTests(unittest.TestCase):
         app.subtitle.reset_mock()
         app.annotation.reset_mock()
         app._apply_watch_font_size("region")
-        app.subtitle.set_font_size.assert_called_once_with(26)
-        app.annotation.set_font_size.assert_called_once_with(26)
+        app.subtitle.set_font_size.assert_called_once_with(20)
+        app.annotation.set_font_size.assert_called_once_with(20)
 
     def test_saving_settings_updates_active_translation_displays_immediately(self):
         app = App.__new__(App)
         app.cfg = {
             "annotate_text_color": "#00F0FF",
             "window_annotate_skip_target_lang": False,
-            "window_watch_font_size": 22,
+            "window_watch_font_size": 20,
             "window_watch_annotate": False,
         }
         app.hotkeys = Mock()
@@ -139,8 +151,8 @@ class FontSettingsTests(unittest.TestCase):
         app._on_settings_saved()
 
         app.translate_win.sync_font_size_from_cfg.assert_called_once_with()
-        app.subtitle.set_font_size.assert_called_once_with(22)
-        app.annotation.set_font_size.assert_called_once_with(22)
+        app.subtitle.set_font_size.assert_called_once_with(20)
+        app.annotation.set_font_size.assert_called_once_with(20)
         app._sync_annotation_mask.assert_called_once_with()
         app._switch_watch_display.assert_not_called()
 

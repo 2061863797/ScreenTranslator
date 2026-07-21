@@ -20,7 +20,7 @@ def main():
             0,
             f"未找到运行环境：\n{pythonw}\n{run_py}\n"
             "请保持 翻译.exe 与 venv、app、run.py 在同一目录。",
-            "翻译",
+            "本地屏译",
             0x10,
         )
         return 1

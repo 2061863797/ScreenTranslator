@@ -8,12 +8,11 @@
       runtime/
         llama/          # llama-server.exe + 依赖 DLL
         models/         # HY-MT 等 .gguf
-        paddlex/        # PaddleX 缓存（含 official_models）
+        ocr/            # ONNX OCR 模型与清单
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 # app/ 的上一级 = 软件根目录
@@ -28,7 +27,7 @@ ICON_ICO = ROOT / "icon.ico"
 RUNTIME_DIR = ROOT / "runtime"
 RUNTIME_LLAMA = RUNTIME_DIR / "llama"
 RUNTIME_MODELS = RUNTIME_DIR / "models"
-RUNTIME_PADDLEX = RUNTIME_DIR / "paddlex"
+RUNTIME_OCR = RUNTIME_DIR / "ocr"
 DEFAULT_GGUF_NAME = "HY-MT1.5-1.8B-Q4_K_M.gguf"
 DEFAULT_MODEL_REL = f"runtime/models/{DEFAULT_GGUF_NAME}"
 DEFAULT_LLAMA_REL = "runtime/llama"
@@ -77,15 +76,6 @@ def available_translation_models(models_dir: str | Path | None = None) -> list[P
     return sorted(models, key=lambda path: path.name.casefold())
 
 
-def setup_runtime_env() -> None:
-    """在导入 Paddle / 启动服务前调用：把 OCR 缓存指到项目内 runtime/paddlex。"""
-    if RUNTIME_PADDLEX.is_dir():
-        # 官方模型目录：runtime/paddlex/official_models/...
-        os.environ["PADDLE_PDX_CACHE_HOME"] = str(RUNTIME_PADDLEX)
-    # 部分旧路径也会读 HUB_HOME，一并指到 paddlex 上一级更稳
-    # 不强制覆盖用户已显式设置的值以外的：上面已固定便携路径
-
-
 def runtime_status() -> dict:
     """诊断用：内置资源是否齐全。"""
     gguf = RUNTIME_MODELS / DEFAULT_GGUF_NAME
@@ -93,8 +83,10 @@ def runtime_status() -> dict:
         "root": str(ROOT),
         "llama_server": (RUNTIME_LLAMA / "llama-server.exe").is_file(),
         "model": gguf.is_file(),
-        "paddlex_models": (RUNTIME_PADDLEX / "official_models").is_dir(),
+        "ocr_models": all((RUNTIME_OCR / name).is_file() for name in (
+            "manifest.json", "det.onnx", "rec.onnx", "characters.txt"
+        )),
         "llama_dir": str(RUNTIME_LLAMA),
         "model_path": str(gguf),
-        "paddlex": str(RUNTIME_PADDLEX),
+        "ocr": str(RUNTIME_OCR),
     }

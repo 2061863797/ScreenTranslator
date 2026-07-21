@@ -14,8 +14,9 @@ ctypes.windll.shcore.SetProcessDpiAwareness(2)
 _SCREEN_LAYOUT: list[tuple[int, int, int, int, int, int, int, int]] = []
 _LAYOUT_LOCK = threading.RLock()
 
-# 翻译浮层始终使用 WDA_NONE，保证 BitBlt、系统截图和录屏都能正常工作。
-# WDA_EXCLUDEFROMCAPTURE 只供框选遮罩使用；该遮罩显示前已经完成桌面抓取。
+# 备注译文浮层默认 WDA_EXCLUDEFROMCAPTURE：自家 OCR 抓屏看不到译文，
+# 无需遮罩还原；用户在设置里打开「出现在截屏/录屏中」才切回 WDA_NONE
+# 并启用遮罩还原。框选遮罩始终排除捕获（显示前已完成桌面抓取）。
 _WDA_NONE = 0x00000000
 _WDA_EXCLUDEFROMCAPTURE = 0x00000011
 _user32 = ctypes.WinDLL("user32", use_last_error=True)

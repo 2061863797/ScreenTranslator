@@ -1,0 +1,44 @@
+{
+  "cases": [
+    {
+      "image": "docs/images/live-translation-overlay.png",
+      "min_lines": 21,
+      "max_lines": 25,
+      "anchors": [
+        "After setup OCR and translation run locally",
+        "HY-MT translation model",
+        "设置完成后 OCR和翻译功能会在本地运行"
+      ]
+    },
+    {
+      "image": "docs/images/window-picker.png",
+      "min_lines": 12,
+      "max_lines": 16,
+      "anchors": [
+        "选择要翻译的窗口",
+        "NVIDIA GeForce Overlay",
+        "开始翻译"
+      ]
+    },
+    {
+      "image": "docs/images/screenshot-translation-result.png",
+      "min_lines": 21,
+      "max_lines": 25,
+      "anchors": [
+        "ScreenTranslator",
+        "Translation local llama-server HY-MT1.5",
+        "翻译引擎本地llama-server HY-MT1.5"
+      ]
+    },
+    {
+      "image": "docs/images/inline-annotation-mode.png",
+      "min_lines": 19,
+      "max_lines": 23,
+      "anchors": [
+        "Quick start",
+        "Choose one of the following routes based on the target PC",
+        "路径A使用完整的Release设置推荐"
+      ]
+    }
+  ]
+}

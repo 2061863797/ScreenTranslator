@@ -1,10 +1,10 @@
-# runtime 资源说明
+# 本地屏译 runtime 资源说明
 
 `runtime` 分为三部分：
 
 | 目录 | 来源 | 内容 |
 |------|------|------|
-| `paddlex\official_models\` | Releases 的 **paddlex** 附件 | PaddleOCR 检测和识别模型 |
+| `ocr\` | Releases 的 **ocr** 附件 | PP-OCRv6 ONNX 模型、字符表和校验清单 |
 | `models\` | Releases 的 **models** 附件 | HY-MT GGUF 翻译模型 |
 | `llama\` | Releases 的 **llama** 附件 | `llama-server.exe` 及依赖 DLL |
 
@@ -12,18 +12,20 @@
 
 ## 默认 Release 方案
 
-Releases 提供 **paddlex**、**models**、**llama** 三个压缩包。
+Releases 提供 **ocr**、**models**、**llama** 三个压缩包。
 
-其中 **llama** 附件是 NVIDIA CUDA 13 版本，适合 NVIDIA 显卡和可正常工作的较新驱动。附件已包含 CUDA 运行库 DLL，无需另装 CUDA Toolkit。
+其中 **llama** 附件同时包含 CPU 与 NVIDIA CUDA 后端。所有电脑使用同一个附件；有兼容显卡时无需另装 CUDA Toolkit。
 
-三个压缩包内第一层应分别为 `paddlex\`、`models\`、`llama\`。把它们都解压到项目的 `runtime\` 目录并允许合并或替换同名文件后，应得到：
+三个压缩包内第一层应分别为 `ocr\`、`models\`、`llama\`。把它们都解压到项目的 `runtime\` 目录并允许合并或替换同名文件后，应得到：
 
 ```text
 runtime\models\HY-MT1.5-1.8B-Q4_K_M.gguf
 runtime\llama\llama-server.exe
 runtime\llama\*.dll
-runtime\paddlex\official_models\PP-OCRv6_medium_det\
-runtime\paddlex\official_models\PP-OCRv6_medium_rec\
+runtime\ocr\manifest.json
+runtime\ocr\det.onnx
+runtime\ocr\rec.onnx
+runtime\ocr\characters.txt
 ```
 
 检查资源：
@@ -38,32 +40,8 @@ runtime\paddlex\official_models\PP-OCRv6_medium_rec\
 
 设置列表只识别文件头有效的 GGUF。自定义模型仍需兼容当前 `llama.cpp`，并自行确认翻译能力、提示格式、许可和硬件需求。
 
-## CPU 或缺少 Releases 附件
+## CPU 与翻译设备
 
-没有 NVIDIA 显卡时，只需解压 **paddlex**、**models** 两个附件，再由脚本下载 CPU 版 llama：
-
-```powershell
-.\scripts\download_runtime.ps1 -CpuOnly -SkipModel -Force
-.\setup.ps1 -CpuOnly
-```
-
-没有 Releases 附件时，也可以尝试由脚本下载所需资源：
-
-```powershell
-.\setup.ps1 -CpuOnly -DownloadRuntime
-```
-
-有 NVIDIA 但缺少 Releases 附件时：
-
-```powershell
-.\setup.ps1 -DownloadRuntime
-```
-
-自动下载来源：
-
-| 资源 | 官方地址 |
-|------|----------|
-| HY-MT GGUF | https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF |
-| llama.cpp | https://github.com/ggml-org/llama.cpp/releases |
+没有 NVIDIA 显卡时也解压同一个 **llama** 附件。软件的“自动”翻译设备会使用 CPU；也可以在“设置 → 高级 → 翻译设备”中选择 CPU，重启后生效。
 
 完整安装步骤见项目根目录的 [README.md](../README.md)。

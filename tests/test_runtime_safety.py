@@ -10,7 +10,14 @@ from PySide6.QtCore import QCoreApplication, QMimeData
 
 from app import capture
 from app.llama_server import LlamaServer
-from app.main import App, _PreloadSignals, _clone_mime_data
+from app.main import (
+    App,
+    _PreloadSignals,
+    _SHUTDOWN_ABORT_SECONDS,
+    _SHUTDOWN_HARD_LIMIT_SECONDS,
+    _clone_mime_data,
+)
+from app.ui.overlays import AnnotationOverlay
 from app.window_watcher import WindowWatcher
 
 
@@ -49,6 +56,24 @@ class _FakeMss:
 
 
 class RuntimeSafetyTests(unittest.TestCase):
+    def test_llama_device_selects_gpu_layers_without_another_runtime(self):
+        server = object.__new__(LlamaServer)
+        server._cfg = {"llama_device": "cpu", "n_gpu_layers": 99}
+        server._cuda_available = None
+        server._has_cuda_device = Mock(return_value=True)
+        self.assertEqual(server._gpu_layers(Path("llama-server.exe")), 0)
+        server._has_cuda_device.assert_not_called()
+
+        server._cfg["llama_device"] = "auto"
+        self.assertEqual(server._gpu_layers(Path("llama-server.exe")), 99)
+
+        server._has_cuda_device.return_value = False
+        self.assertEqual(server._gpu_layers(Path("llama-server.exe")), 0)
+
+        server._cfg["llama_device"] = "gpu"
+        with self.assertRaisesRegex(RuntimeError, "CUDA"):
+            server._gpu_layers(Path("llama-server.exe"))
+
     def test_llama_timeout_reaps_spawned_process(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -60,12 +85,40 @@ class RuntimeSafetyTests(unittest.TestCase):
                 "model_path": str(model),
                 "server_host": "127.0.0.1",
                 "server_port": 18080,
+                "llama_device": "cpu",
             })
             proc = _FakeProcess()
             server.is_healthy = Mock(return_value=False)
             with patch("app.llama_server.subprocess.Popen", return_value=proc):
                 with self.assertRaises(TimeoutError):
                     server.start(wait_seconds=0)
+            self.assertTrue(proc.terminated)
+            self.assertIsNone(server._proc)
+
+    def test_llama_cold_start_can_be_cancelled_without_waiting_for_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "llama-server.exe").write_bytes(b"x")
+            model = root / "model.gguf"
+            model.write_bytes(b"GGUF")
+            server = LlamaServer({
+                "llama_dir": str(root),
+                "model_path": str(model),
+                "server_host": "127.0.0.1",
+                "server_port": 18080,
+                "llama_device": "cpu",
+            })
+            proc = _FakeProcess()
+            server.is_healthy = Mock(return_value=False)
+
+            def launch(*_args, **_kwargs):
+                server._stop_requested.set()
+                return proc
+
+            with patch("app.llama_server.subprocess.Popen", side_effect=launch):
+                with self.assertRaisesRegex(InterruptedError, "取消"):
+                    server.start(wait_seconds=180)
+
             self.assertTrue(proc.terminated)
             self.assertIsNone(server._proc)
 
@@ -142,7 +195,7 @@ class RuntimeSafetyTests(unittest.TestCase):
         watcher._observe_empty_ocr_frame()
         cleared.assert_called_once_with()
 
-    def test_identical_frames_are_still_checked_by_continuous_ocr(self):
+    def test_identical_frames_skip_ocr_with_periodic_recheck(self):
         ocr = Mock()
         watcher = WindowWatcher(
             ocr,
@@ -157,19 +210,52 @@ class RuntimeSafetyTests(unittest.TestCase):
             profile="window",
         )
         image = np.zeros((20, 30, 3), dtype=np.uint8)
-        watcher._grab = Mock(return_value=((0, 0, 30, 20), image))
-        calls = 0
+        frames = 0
 
-        def _recognize(_image):
-            nonlocal calls
-            calls += 1
-            if calls == 2:
+        def _grab():
+            nonlocal frames
+            frames += 1
+            if frames >= 8:
                 watcher._running = False
-            return []
+            return ((0, 0, 30, 20), image)
 
-        ocr.recognize.side_effect = _recognize
+        watcher._grab = _grab
+        ocr.recognize.return_value = []
         watcher.run()
 
+        # 8 帧逐字节相同：第 1 帧识别，连续跳过 5 帧后第 7 帧强制复检
+        self.assertEqual(ocr.recognize.call_count, 2)
+
+    def test_changed_frames_are_recognized_immediately(self):
+        ocr = Mock()
+        watcher = WindowWatcher(
+            ocr,
+            Mock(),
+            {
+                "window_watch_interval_ms": 20,
+                "window_watch_diff_threshold": 0.8,
+                "window_annotate_skip_target_lang": False,
+                "target_language": "简体中文",
+            },
+            hwnd=404,
+            profile="window",
+        )
+        blank = np.zeros((20, 30, 3), dtype=np.uint8)
+        changed = np.full((20, 30, 3), 255, dtype=np.uint8)
+        frames = 0
+
+        def _grab():
+            nonlocal frames
+            frames += 1
+            if frames >= 3:
+                watcher._running = False
+            return ((0, 0, 30, 20), changed if frames == 3 else blank)
+
+        watcher._grab = _grab
+        ocr.recognize.return_value = []
+        watcher.run()
+
+        # 第 1 帧与内容变化的第 3 帧各识别一次；相同的第 2 帧被跳过
         self.assertEqual(ocr.recognize.call_count, 2)
 
     def test_annotation_mask_sync_is_limited_to_active_region_notes(self):
@@ -180,6 +266,7 @@ class RuntimeSafetyTests(unittest.TestCase):
         app.annotation.capture_mask.return_value = mask
         app._watch_region = (0, 0, 300, 200)
         app._watch_annotate = True
+        app.cfg = {"annotate_capture_visible": True}
 
         app._sync_annotation_mask()
         app._watcher.set_annotation_mask.assert_called_once_with(mask)
@@ -188,6 +275,96 @@ class RuntimeSafetyTests(unittest.TestCase):
         app._watch_annotate = False
         app._sync_annotation_mask()
         app._watcher.set_annotation_mask.assert_called_once_with(None)
+
+        # 浮层被排除捕获（默认）时不生成遮罩：OCR 抓屏看不到译文
+        app._watcher.set_annotation_mask.reset_mock()
+        app.annotation.capture_mask.reset_mock()
+        app._watch_annotate = True
+        app.cfg = {"annotate_capture_visible": False}
+        app._sync_annotation_mask()
+        app._watcher.set_annotation_mask.assert_called_once_with(None)
+        app.annotation.capture_mask.assert_not_called()
+
+    def test_annotation_overlay_capture_affinity_follows_setting(self):
+        overlay = Mock()
+        with (
+            patch("app.ui.overlays._exclude_from_capture") as exclude,
+            patch("app.ui.overlays._allow_capture") as allow,
+        ):
+            overlay._capture_visible = False
+            AnnotationOverlay._apply_capture_affinity(overlay)
+            exclude.assert_called_once_with(overlay)
+            allow.assert_not_called()
+
+            overlay._capture_visible = True
+            AnnotationOverlay._apply_capture_affinity(overlay)
+            allow.assert_called_once_with(overlay)
+
+    def test_region_watch_restacks_every_visible_layer(self):
+        app = App.__new__(App)
+        app._watch_hwnd = None
+        app._watch_region = (10, 20, 300, 180)
+        app.subtitle = Mock()
+        app.annotation = Mock()
+        app.annotate_ctrl = Mock()
+        app.region_frame = Mock()
+
+        app._restack_watch_layer()
+
+        app.subtitle.restack_layer.assert_called_once_with()
+        app.annotation.restack_layer.assert_called_once_with()
+        app.annotate_ctrl.restack_layer.assert_called_once_with()
+        app.region_frame.restack_layer.assert_called_once_with()
+
+    def test_ownerless_annotation_reasserts_topmost_without_focus(self):
+        overlay = Mock()
+        overlay._layer_owner = None
+        overlay.isVisible.return_value = True
+        with patch("app.ui.overlays.set_overlay_layer") as set_layer:
+            AnnotationOverlay.restack_layer(overlay)
+        set_layer.assert_called_once_with(overlay, None)
+
+    def test_window_overlay_is_stacked_above_target_not_below(self):
+        """SetWindowPos 的 hWndInsertAfter 是「插到其下方」；直接传目标
+        句柄会把译文浮层压到被译窗口底下看不见，必须插到目标前驱之后。"""
+        from PySide6.QtCore import Qt
+
+        from app.ui import topmost
+
+        widget = Mock()
+        widget.windowFlags.return_value = Qt.WindowType.FramelessWindowHint
+        widget.winId.return_value = 1111
+        with (
+            patch.object(topmost, "_GetWindow", return_value=2222),
+            patch.object(topmost, "_set_window_owner", return_value=True),
+            patch.object(topmost, "_set_window_pos", return_value=True) as swp,
+        ):
+            topmost.set_overlay_layer(widget, 3333)
+        inserted = [call.args[1] for call in swp.call_args_list]
+        self.assertIn(2222, inserted)      # 插到目标前驱之后 = 目标正上方
+        self.assertNotIn(3333, inserted)   # 不得插到目标之后（下方）
+
+    def test_restack_uses_predecessor_and_falls_back_to_top(self):
+        from app.ui import topmost
+
+        widget = Mock()
+        widget.winId.return_value = 1111
+        widget.isVisible.return_value = True
+        with (
+            patch.object(topmost, "_GetWindow", return_value=2222),
+            patch.object(topmost, "_set_window_pos", return_value=True) as swp,
+        ):
+            topmost.restack_above_owner(widget, 3333)
+        self.assertEqual(swp.call_args.args[1], 2222)
+
+        # 目标已在最前（无前驱）或前驱就是浮层自身 → HWND_TOP
+        for prev in (0, 1111):
+            with (
+                patch.object(topmost, "_GetWindow", return_value=prev),
+                patch.object(topmost, "_set_window_pos", return_value=True) as swp,
+            ):
+                topmost.restack_above_owner(widget, 3333)
+            self.assertEqual(swp.call_args.args[1], topmost._HWND_TOP)
 
     def test_clipboard_mime_clone_preserves_all_formats(self):
         source = QMimeData()
@@ -213,10 +390,64 @@ class RuntimeSafetyTests(unittest.TestCase):
             time.sleep(0.01)
         self.assertEqual(received, [("ocr", "ok", "")])
 
+    def test_shutdown_has_abort_and_hard_deadlines(self):
+        app = App.__new__(App)
+        worker = Mock()
+        worker.isRunning.return_value = True
+        app._workers = [worker]
+        app._retired_watchers = []
+        app._preload_threads = []
+        app.translate_win = Mock()
+        app.translate_win.active_worker.return_value = None
+        app.resources = Mock()
+        app.log = Mock()
+        app.qapp = Mock()
+        app._shutdown_started_at = 100.0
+        app._shutdown_abort_thread = None
+        app._shutdown_server_thread = None
+        app._shutdown_resources_closed = False
+        abort_thread = Mock()
+        abort_thread.is_alive.return_value = True
+
+        with (
+            patch("app.main.time.monotonic", return_value=100.0 + _SHUTDOWN_ABORT_SECONDS),
+            patch("app.main.threading.Thread", return_value=abort_thread) as make_thread,
+            patch("app.main.QTimer.singleShot") as schedule,
+        ):
+            app._poll_shutdown()
+
+        make_thread.assert_called_once()
+        abort_thread.start.assert_called_once_with()
+        schedule.assert_called_once()
+        app.qapp.quit.assert_not_called()
+
+        with (
+            patch("app.main.time.monotonic", return_value=100.0 + _SHUTDOWN_HARD_LIMIT_SECONDS),
+            patch("app.main.QTimer.singleShot") as schedule,
+        ):
+            app._poll_shutdown()
+
+        app.qapp.quit.assert_called_once_with()
+        schedule.assert_not_called()
+
+        app.qapp.quit.reset_mock()
+        app._workers = []
+        app._shutdown_abort_thread = None
+        app._shutdown_resources_closed = True
+        app._shutdown_server_thread = Mock()
+        app._shutdown_server_thread.is_alive.return_value = True
+        with (
+            patch("app.main.time.monotonic", return_value=100.0 + _SHUTDOWN_HARD_LIMIT_SECONDS),
+            patch("app.main.QTimer.singleShot") as schedule,
+        ):
+            app._poll_shutdown()
+        app.qapp.quit.assert_called_once_with()
+        schedule.assert_not_called()
+
     def test_cancelled_selection_clears_every_mode(self):
         app = App.__new__(App)
         app.log = Mock()
-        for mode in ("screenshot", "silent_ocr", "region_watch"):
+        for mode in ("screenshot", "region_watch"):
             app._pending_mode = mode
             app._on_region_cancelled()
             self.assertIsNone(app._pending_mode)
@@ -233,7 +464,7 @@ class RuntimeSafetyTests(unittest.TestCase):
         app.log = Mock()
         app._show_error = Mock()
         with patch("app.main.capture.configure_qt_screens"):
-            app._start_select("silent_ocr")
+            app._start_select("region_watch")
         self.assertIsNone(app._pending_mode)
         app._show_error.assert_called_once_with("capture unavailable")
 

@@ -1,10 +1,10 @@
-# runtime assets
+# LocalScreen Translator runtime assets
 
 The `runtime` directory has three parts:
 
 | Folder | Supplied by | Content |
 |--------|-------------|---------|
-| `paddlex\official_models\` | Release **paddlex** asset | PaddleOCR detection and recognition models |
+| `ocr\` | Release **ocr** asset | PP-OCRv6 ONNX models, character table, and integrity manifest |
 | `models\` | Release **models** asset | HY-MT GGUF translation model |
 | `llama\` | Release **llama** asset | `llama-server.exe` and its DLLs |
 
@@ -12,18 +12,20 @@ The `runtime` directory has three parts:
 
 ## Default Release setup
 
-Releases provide three archives: **paddlex**, **models**, and **llama**.
+Releases provide three archives: **ocr**, **models**, and **llama**.
 
-The **llama** asset is the NVIDIA CUDA 13 build. It is intended for an NVIDIA GPU with a recent working driver. CUDA runtime DLLs are included; installing the CUDA Toolkit separately is not required.
+The **llama** asset contains both CPU and NVIDIA CUDA backends. Every PC uses the same asset; compatible GPUs do not require a separate CUDA Toolkit installation.
 
-The archives' top-level folders must be `paddlex\`, `models\`, and `llama\`, respectively. Extract all three into the project's `runtime\` directory and allow your archive tool to merge or replace files; the resulting layout must be:
+The archives' top-level folders must be `ocr\`, `models\`, and `llama\`, respectively. Extract all three into the project's `runtime\` directory and allow your archive tool to merge or replace files; the resulting layout must be:
 
 ```text
 runtime\models\HY-MT1.5-1.8B-Q4_K_M.gguf
 runtime\llama\llama-server.exe
 runtime\llama\*.dll
-runtime\paddlex\official_models\PP-OCRv6_medium_det\
-runtime\paddlex\official_models\PP-OCRv6_medium_rec\
+runtime\ocr\manifest.json
+runtime\ocr\det.onnx
+runtime\ocr\rec.onnx
+runtime\ocr\characters.txt
 ```
 
 Check the assets with:
@@ -38,32 +40,8 @@ Check the assets with:
 
 The settings list accepts only files with a valid GGUF header. A custom model must still be compatible with the bundled `llama.cpp`; verify its translation behavior, prompt format, license, and hardware requirements yourself.
 
-## CPU setup or missing Release assets
+## CPU and translation device
 
-Without an NVIDIA GPU, extract only the **paddlex** and **models** assets, then let the script download the CPU llama build:
-
-```powershell
-.\scripts\download_runtime.ps1 -CpuOnly -SkipModel -Force
-.\setup.ps1 -CpuOnly
-```
-
-If the Release assets are unavailable, you can instead let the script download the required files:
-
-```powershell
-.\setup.ps1 -CpuOnly -DownloadRuntime
-```
-
-With NVIDIA but missing Release assets:
-
-```powershell
-.\setup.ps1 -DownloadRuntime
-```
-
-Automatic downloads use these official sources:
-
-| Asset | Official URL |
-|-------|--------------|
-| HY-MT GGUF | https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF |
-| llama.cpp | https://github.com/ggml-org/llama.cpp/releases |
+Without an NVIDIA GPU, extract the same **llama** asset. Auto selects the CPU; you can also select CPU under Settings → Advanced → Translation device and restart the app.
 
 See the root [README.en.md](../README.en.md) for the complete installation guide.

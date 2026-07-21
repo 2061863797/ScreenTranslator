@@ -1,9 +1,11 @@
 # UI
-PySide6==6.11.1
+PySide6_Essentials==6.11.1
 
-# OCR (paddlepaddle-gpu is installed separately, see README)
+# OCR: DirectML with automatic CPU fallback
 numpy>=1.24,<2.4
-paddleocr==3.7.0
+onnxruntime-directml==1.24.4
+opencv-python-headless==5.0.0.93
+pyclipper==1.4.0
 
 # Screen capture & system interaction
 mss==10.2.0

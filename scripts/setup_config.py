@@ -12,7 +12,7 @@ from pathlib import Path
 def main() -> int:
     if len(sys.argv) < 5:
         print(
-            "用法: setup_config.py <root> <use_gpu:0|1> <threads> <n_gpu_layers>",
+            "用法: setup_config.py <root> <use_gpu:0|1> <threads> <n_gpu_layers> [device]",
             file=sys.stderr,
         )
         return 2
@@ -21,6 +21,7 @@ def main() -> int:
     use_gpu = sys.argv[2] == "1"
     threads = int(sys.argv[3])
     ngl = int(sys.argv[4])
+    device_override = sys.argv[5].strip().lower() if len(sys.argv) > 5 else ""
 
     cfg_path = root / "config.json"
     example = root / "config.example.json"
@@ -30,6 +31,7 @@ def main() -> int:
         "model_path": "runtime/models/HY-MT1.5-1.8B-Q4_K_M.gguf",
         "server_host": "127.0.0.1",
         "server_port": 8080,
+        "llama_device": "auto",
         "n_gpu_layers": ngl,
         "threads": threads,
         "ctx_size": 2048,
@@ -43,13 +45,11 @@ def main() -> int:
         "target_language": "简体中文",
         "max_tokens": 512,
         "history_enabled": True,
-        "ocr_lang": None,
         "ocr_max_side": 1600,
         "ocr_score_min": 0.45,
         "hotkey_screenshot": "<alt>+q",
         "hotkey_word": "<alt>+w",
         "hotkey_window": "<alt>+e",
-        "hotkey_silent_ocr": "<alt>+s",
         "hotkey_region_watch": "<alt>+r",
         "window_watch_interval_ms": 800,
         "window_watch_diff_threshold": 0.9,
@@ -77,12 +77,19 @@ def main() -> int:
         except (OSError, json.JSONDecodeError):
             pass
 
+    cfg.pop("ocr_lang", None)
+    cfg.pop("hotkey_silent_ocr", None)
+
     # setup 职责：便携路径 + 本机算力参数
     cfg["llama_dir"] = "runtime/llama"
     # 保留设置页选择的模型；首次安装或无效配置仍使用默认模型。
     if not isinstance(cfg.get("model_path"), str) or not cfg["model_path"].strip():
         cfg["model_path"] = "runtime/models/HY-MT1.5-1.8B-Q4_K_M.gguf"
     cfg["n_gpu_layers"] = ngl
+    if device_override in {"gpu", "cpu"}:
+        cfg["llama_device"] = device_override
+    elif not isinstance(cfg.get("llama_device"), str) or cfg["llama_device"].lower() not in {"auto", "gpu", "cpu"}:
+        cfg["llama_device"] = "auto"
     cfg["threads"] = threads
 
     tmp = cfg_path.with_name(cfg_path.name + ".tmp")

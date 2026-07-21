@@ -22,7 +22,6 @@ jobs:
         run: |
           python -m pip install -U pip
           python -m pip install -r requirements.txt
-          python -m pip install "paddlepaddle==3.3.1" "numpy>=1.24,<2.4" -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
           python -m pip check
       - name: 单元测试
         env:
@@ -31,4 +30,4 @@ jobs:
       - name: 真实导入冒烟
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python scripts/smoke_import.py
+        run: python scripts/smoke_import.py --skip-runtime-assets

@@ -10,7 +10,7 @@ import ctypes
 from ctypes import wintypes
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtWidgets import QWidget
 
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     pass
 
 # Win32
+_HWND_TOP = 0
 _HWND_TOPMOST = -1
 _HWND_NOTOPMOST = -2
 _SWP_NOSIZE = 0x0001
@@ -29,6 +30,8 @@ _SWP_NOACTIVATE = 0x0010
 _SWP_NOOWNERZORDER = 0x0200
 # 顶层窗：GWL/GWLP_HWNDPARENT 表示 owner（从属关系），不是 parent
 _GWLP_HWNDPARENT = -8
+# GetWindow：取 Z 序中紧邻其上的窗口
+_GW_HWNDPREV = 3
 
 _log = get_logger("topmost")
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -51,6 +54,23 @@ _SetWindowPos.argtypes = [
     wintypes.UINT,
 ]
 _SetWindowPos.restype = wintypes.BOOL
+_GetWindow = _user32.GetWindow
+_GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+_GetWindow.restype = wintypes.HWND
+
+
+def _insert_after_above(hwnd: int, target_hwnd: int) -> int:
+    """返回能把浮层放到目标正上方的 hWndInsertAfter。
+
+    SetWindowPos 的 hWndInsertAfter 语义是「插到该窗口之后（Z 序下方）」，
+    直接传目标句柄会把浮层压到目标底下。要贴到目标上方，必须插到
+    目标前驱窗口之后；目标已在最前、或前驱就是浮层自身时用 HWND_TOP。
+    """
+    prev = _GetWindow(target_hwnd, _GW_HWNDPREV)
+    prev = int(prev) if prev else 0
+    if not prev or prev == hwnd:
+        return _HWND_TOP
+    return prev
 
 
 def _set_window_owner(hwnd: int, owner_hwnd: int) -> bool:
@@ -138,10 +158,11 @@ def set_overlay_layer(widget: QWidget, owner_hwnd: int | None) -> None:
             | _SWP_NOOWNERZORDER
         )
         if owner:
-            # 退出 TOPMOST 层，再挂 owner，最后插到目标正上方
+            # 退出 TOPMOST 层，再挂 owner，最后贴到目标正上方
+            # （注意不能把 owner 直接当 hWndInsertAfter，那是「目标下方」）
             ok_not_top = _set_window_pos(hwnd, _HWND_NOTOPMOST, swp)
             ok_owner = _set_window_owner(hwnd, owner)
-            ok_stack = _set_window_pos(hwnd, owner, swp)
+            ok_stack = _set_window_pos(hwnd, _insert_after_above(hwnd, owner), swp)
             success = ok_not_top and ok_owner and ok_stack
         else:
             ok_owner = _set_window_owner(hwnd, 0)
@@ -163,7 +184,7 @@ def restack_above_owner(widget: QWidget, owner_hwnd: int) -> None:
             return
         _set_window_pos(
             hwnd,
-            int(owner_hwnd),
+            _insert_after_above(hwnd, int(owner_hwnd)),
             _SWP_NOMOVE
             | _SWP_NOSIZE
             | _SWP_NOACTIVATE
@@ -241,6 +262,32 @@ def center_on_cursor_screen(widget: QWidget) -> None:
         widget.move(x, y)
     except Exception:
         pass
+
+
+def window_geometry_value(widget: QWidget) -> list[int]:
+    geo = widget.geometry()
+    return [geo.x(), geo.y(), geo.width(), geo.height()]
+
+
+def restore_window_geometry(widget: QWidget, value) -> bool:
+    """仅恢复仍与当前任一屏幕相交的几何，避免窗口落在已移除的副屏。"""
+    if not isinstance(value, list) or len(value) != 4:
+        return False
+    try:
+        x, y, width, height = (int(item) for item in value)
+    except (TypeError, ValueError):
+        return False
+    if width < 100 or height < 60:
+        return False
+    rect = QRect(x, y, width, height)
+    if not any(
+        rect.intersected(screen.availableGeometry()).width() >= 80
+        and rect.intersected(screen.availableGeometry()).height() >= 40
+        for screen in QGuiApplication.screens()
+    ):
+        return False
+    widget.setGeometry(rect)
+    return True
 
 
 def topmost_message(

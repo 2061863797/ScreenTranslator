@@ -4,7 +4,6 @@
 import threading
 import time
 import traceback
-from difflib import SequenceMatcher
 
 import numpy as np
 from PySide6.QtCore import QThread, Signal
@@ -12,6 +11,7 @@ from PySide6.QtCore import QThread, Signal
 from . import capture
 from .applog import get_logger
 from .ocr_engine import OcrEngine
+from .pipelines import LiveTranslationState
 from .textlang import is_already_target_language
 from .translator import Translator
 
@@ -71,6 +71,9 @@ class WindowWatcher(QThread):
     content_cleared = Signal()
     stopped = Signal(str)
 
+    # 画面逐字节未变时最多连续跳过的 OCR 轮数（保险起见周期性强制识别）
+    _MAX_SKIPPED_FRAMES = 5
+
     def __init__(self, ocr: OcrEngine, translator: Translator, cfg: dict,
                  hwnd: int | None = None,
                  region: tuple[int, int, int, int] | None = None,
@@ -92,30 +95,68 @@ class WindowWatcher(QThread):
         self._display_mode = display_mode
         self._profile = profile
         self._running = True
-        self._last_text = ""
+        self._paused = threading.Event()
+        self._state = LiveTranslationState()
+        # _state 会被主线程（set_display_mode/set_region）与监视线程并发访问；
+        # pipelines 的状态机本身无锁，统一在这里用 RLock 保护。
+        self._state_lock = threading.RLock()
         self._last_rect = None
-        self._empty_ocr_frames = 0
-        # 备注模式：原文→译文，画面只变几行时只重译变化行
-        self._line_tr_cache: dict[str, str] = {}
         self._last_skip_target: bool | None = None
+        # 静止画面跳过 OCR 用：上一帧原始图像与已连续跳过帧数
+        self._last_frame: np.ndarray | None = None
+        self._skipped_frames = 0
+
+    @property
+    def _last_text(self):
+        with self._state_lock:
+            return self._state.last_text
+
+    @_last_text.setter
+    def _last_text(self, value):
+        with self._state_lock:
+            self._state.last_text = value
+
+    @property
+    def _empty_ocr_frames(self):
+        with self._state_lock:
+            return self._state.empty_frames
+
+    @_empty_ocr_frames.setter
+    def _empty_ocr_frames(self, value):
+        with self._state_lock:
+            self._state.empty_frames = value
+
+    @property
+    def _line_tr_cache(self):
+        with self._state_lock:
+            return self._state.line_cache
+
+    @_line_tr_cache.setter
+    def _line_tr_cache(self, value):
+        with self._state_lock:
+            self._state.line_cache = value
 
     def set_display_mode(self, mode: str):
         if mode not in ("subtitle", "annotate"):
             return
         self._display_mode = mode
-        self._last_text = ""
-        self._empty_ocr_frames = 0
-        self._line_tr_cache.clear()
+        with self._state_lock:
+            self._state.reset(clear_cache=True)
         self._last_skip_target = None
+        # 单次赋值原子；最坏多跑一帧 OCR
+        self._last_frame = None
+        self._skipped_frames = 0
         self.set_annotation_mask(None, reset_reference=True)
 
     def set_region(self, region: tuple[int, int, int, int] | None):
         """区域监视时拖动选区后更新（线程安全）。"""
         with self._region_lock:
             self._region = region
-        self._last_text = ""
-        self._empty_ocr_frames = 0
         # 选区变了，旧行框可能失效，但同文案译文仍可复用
+        with self._state_lock:
+            self._state.reset(clear_cache=False)
+        self._last_frame = None
+        self._skipped_frames = 0
         self.set_annotation_mask(None, reset_reference=True)
 
     def set_annotation_mask(
@@ -162,17 +203,25 @@ class WindowWatcher(QThread):
             self._annotation_clean_frame = clean.copy()
         return clean
 
-    def _observe_empty_ocr_frame(self) -> None:
-        """连续两轮无文字才清空，兼顾及时消失和单帧 OCR 抖动。"""
-        self._empty_ocr_frames += 1
-        if self._empty_ocr_frames < 2 or not self._last_text:
-            return
-        self._last_text = ""
+    def _notify_cleared(self) -> None:
         self.content_cleared.emit()
         _log.info("连续两轮未识别到文字，已清空持续翻译显示")
 
+    def _observe_empty_ocr_frame(self) -> None:
+        """连续两轮无文字才清空，兼顾及时消失和单帧 OCR 抖动。"""
+        with self._state_lock:
+            event, _ = self._state.observe([], 0.0)
+        if event == "clear":
+            self._notify_cleared()
+
     def stop(self):
         self._running = False
+
+    def set_paused(self, paused: bool) -> None:
+        if paused:
+            self._paused.set()
+        else:
+            self._paused.clear()
 
     def _grab(self):
         if self._region is not None:
@@ -194,7 +243,13 @@ class WindowWatcher(QThread):
         )
         try:
             while self._running:
+                while self._running and self._paused.is_set():
+                    time.sleep(0.05)
+                if not self._running:
+                    break
                 # 窗口 / 区域各自一套间隔与文本变化阈值
+                # _cfg 为共享引用：设置保存后下一轮立即生效。单键读取在 GIL
+                # 下是原子的，最坏用到上一帧旧值，无需加锁。
                 p = self._profile
                 interval = self._cfg[f"{p}_watch_interval_ms"] / 1000.0
                 threshold = float(self._cfg[f"{p}_watch_diff_threshold"])
@@ -205,9 +260,8 @@ class WindowWatcher(QThread):
                     skip_now = bool(self._cfg.get(skip_key))
                     if skip_now != self._last_skip_target:
                         self._last_skip_target = skip_now
-                        self._line_tr_cache.clear()
-                        self._last_text = ""
-                        self._empty_ocr_frames = 0
+                        with self._state_lock:
+                            self._state.reset(clear_cache=True)
                 t0 = time.time()
 
                 try:
@@ -222,22 +276,36 @@ class WindowWatcher(QThread):
                     _log.warning("监视目标无法捕获，结束")
                     self.stopped.emit("监视目标已关闭或无法捕获")
                     return
-                if self._profile == "region" and self._display_mode == "annotate":
-                    img = self._remove_annotation_overlay(img)
                 if rect != self._last_rect:
                     self._last_rect = rect
                     self.window_moved.emit(*rect)
 
-                lines = self._ocr.recognize(img)
-                text = "\n".join(ln.text for ln in lines)
-
-                if not text.strip():
-                    self._observe_empty_ocr_frame()
+                # 画面逐字节未变时跳过 OCR（结果必然相同）；为防极端情况
+                # 每隔 _MAX_SKIPPED_FRAMES 帧仍强制识别一次。
+                if (
+                    self._last_frame is not None
+                    and self._skipped_frames < self._MAX_SKIPPED_FRAMES
+                    and img.shape == self._last_frame.shape
+                    and np.array_equal(img, self._last_frame)
+                ):
+                    self._skipped_frames += 1
                 else:
-                    self._empty_ocr_frames = 0
-                    sim = SequenceMatcher(None, self._last_text, text).ratio()
-                    if sim < threshold:
-                        self._last_text = text
+                    self._skipped_frames = 0
+                    self._last_frame = img
+                    # 仅当浮层允许被捕获（会出现在自家抓屏里）才需要还原底图
+                    if (
+                        self._profile == "region"
+                        and self._display_mode == "annotate"
+                        and bool(self._cfg.get("annotate_capture_visible"))
+                    ):
+                        img = self._remove_annotation_overlay(img)
+                    lines = self._ocr.recognize(img)
+                    with self._state_lock:
+                        event, text = self._state.observe(lines, threshold)
+
+                    if event == "clear":
+                        self._notify_cleared()
+                    elif event == "change":
                         mode_tag = (
                             f"{self._profile}_annotate"
                             if self._display_mode == "annotate"
@@ -284,45 +352,48 @@ class WindowWatcher(QThread):
         srcs = [ln.text.strip() for ln in lines]
         todo_text: list[str] = []
         skipped = 0
-        for s in srcs:
-            if not s:
-                continue
-            if s in self._line_tr_cache:
-                continue
-            if skip_target and is_already_target_language(s, target):
-                self._line_tr_cache[s] = _SKIP_TARGET
-                skipped += 1
-                continue
-            todo_text.append(s)
+        with self._state_lock:
+            cache = self._state.line_cache
+            for s in srcs:
+                if not s:
+                    continue
+                if s in cache:
+                    continue
+                if skip_target and is_already_target_language(s, target):
+                    cache[s] = _SKIP_TARGET
+                    skipped += 1
+                    continue
+                todo_text.append(s)
 
         if todo_text and self._running:
             unique = list(dict.fromkeys(todo_text))
+            # 翻译请求不持锁：期间主线程可安全清缓存（重置后会重新累积）
             trs = self._translator.translate_lines(unique, target)
-            for s, tr in zip(unique, trs):
-                if tr:
-                    self._line_tr_cache[s] = tr
-            if len(self._line_tr_cache) > 400:
-                alive = set(srcs)
-                self._line_tr_cache = {
-                    k: v for k, v in self._line_tr_cache.items() if k in alive
-                }
+            with self._state_lock:
+                for s, tr in zip(unique, trs):
+                    if tr:
+                        self._state.line_cache[s] = tr
+                self._state.prune_cache(srcs)
 
         items = []
         parts = []
-        for ln, s in zip(lines, srcs):
-            if not s:
-                continue
-            tr = self._line_tr_cache.get(s, "")
-            if not tr or tr == _SKIP_TARGET:
-                continue
-            items.append((ln.box, tr))
-            parts.append(tr)
+        with self._state_lock:
+            cache = self._state.line_cache
+            for ln, s in zip(lines, srcs):
+                if not s:
+                    continue
+                tr = cache.get(s, "")
+                if not tr or tr == _SKIP_TARGET:
+                    continue
+                items.append((ln.box, tr))
+                parts.append(tr)
+            cache_size = len(cache)
         _log.info(
             "备注增量译 total=%d new=%d skip_target=%d cache=%d skip_on=%s",
             len([s for s in srcs if s]),
             len(todo_text),
             skipped,
-            len(self._line_tr_cache),
+            cache_size,
             skip_target,
         )
         return items, "\n".join(parts)

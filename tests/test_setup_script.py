@@ -6,13 +6,16 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class SetupScriptTests(unittest.TestCase):
-    def test_paddle_install_keeps_numpy_compatible_with_paddlex(self):
+    def test_runtime_uses_slim_onnx_dependencies_without_paddle(self):
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
         setup_script = (ROOT / "setup.ps1").read_text(encoding="utf-8")
 
         self.assertIn("numpy>=1.24,<2.4", requirements)
-        self.assertIn('$numpyRequirement = "numpy>=1.24,<2.4"', setup_script)
-        self.assertIn("-Arguments @($numpyRequirement)", setup_script)
+        self.assertIn("onnxruntime-directml", requirements)
+        self.assertIn("PySide6_Essentials", requirements)
+        self.assertNotIn("paddleocr", requirements.lower())
+        self.assertNotIn("Install-Paddle", setup_script)
+        self.assertNotIn("SkipPaddle", setup_script)
 
     def test_install_and_check_modes_verify_dependency_consistency(self):
         setup_script = (ROOT / "setup.ps1").read_text(encoding="utf-8")
@@ -42,6 +45,22 @@ class SetupScriptTests(unittest.TestCase):
         self.assertIn("Invoke-BuildLauncher -VenvPy $venvPy", setup_script)
         self.assertIn('-Arguments @("pyinstaller")', setup_script)
         self.assertIn("翻译.exe 生成结束后仍未找到", setup_script)
+
+    def test_runtime_assets_are_release_only(self):
+        setup_script = (ROOT / "setup.ps1").read_text(encoding="utf-8")
+        self.assertNotIn("DownloadRuntime", setup_script)
+        self.assertFalse((ROOT / "scripts" / "download_runtime.ps1").exists())
+
+    def test_ci_does_not_install_paddle_or_require_release_assets(self):
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotIn("paddlepaddle", workflow.lower())
+        self.assertIn(
+            "python scripts/smoke_import.py --skip-runtime-assets",
+            workflow,
+        )
 
 
 if __name__ == "__main__":

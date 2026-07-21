@@ -1,26 +1,22 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-  翻译（ScreenTranslator）一键环境安装 / 体检 / 按本机生成配置
+  本地屏译（LocalScreen Translator）一键环境安装 / 体检 / 按本机生成配置
 
 .DESCRIPTION
   在项目根执行：
     .\setup.ps1                 # 完整安装
     .\setup.ps1 -Check          # 只检查
     .\setup.ps1 -CpuOnly        # 强制 CPU
-    .\setup.ps1 -Gpu            # 强制 GPU 版 Paddle
-    .\setup.ps1 -SkipPaddle       # 跳过 Paddle
+    .\setup.ps1 -Gpu            # 强制 llama 使用 GPU
     .\setup.ps1 -BuildLauncher    # 强制重建 翻译.exe（普通安装缺少时会自动生成）
-    .\setup.ps1 -DownloadRuntime  # 顺带下载模型/llama（见 scripts\download_runtime.ps1）
 #>
 
 param(
     [switch]$Check,
     [switch]$CpuOnly,
     [switch]$Gpu,
-    [switch]$SkipPaddle,
     [switch]$BuildLauncher,
-    [switch]$DownloadRuntime,
     [string]$Python = ""
 )
 
@@ -140,52 +136,6 @@ function Install-PipPackages {
     Write-Ok "基础依赖已安装"
 }
 
-function Install-Paddle {
-    param(
-        [string]$VenvPy,
-        [bool]$WantGpu
-    )
-    if ($SkipPaddle) {
-        Write-Warn2 "跳过 Paddle 安装（-SkipPaddle）"
-        return
-    }
-    $kind = "CPU"
-    $numpyRequirement = "numpy>=1.24,<2.4"
-    if ($WantGpu) { $kind = "GPU" }
-    Write-Step "安装 PaddlePaddle ($kind)"
-    if ($WantGpu) {
-        & $VenvPy -m pip uninstall -y paddlepaddle 2>$null
-        $idx = "https://www.paddlepaddle.org.cn/packages/stable/cu129/"
-        Write-Host "  源: $idx"
-        & $VenvPy -c "import paddle; raise SystemExit(0 if paddle.__version__ == '3.3.1' and str(paddle.version.cuda()).startswith('12.9') else 1)" 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Ok "已有匹配的 Paddle GPU 3.3.1 / CUDA 12.9"
-        } else {
-            try {
-                Install-PipWithRetry -VenvPy $VenvPy `
-                    -Arguments @("--upgrade", "--force-reinstall", "paddlepaddle-gpu==3.3.1", $numpyRequirement, "-i", $idx) `
-                    -FailureMessage "GPU 版 Paddle 安装失败"
-            } catch {
-                Write-Warn2 "GPU 版安装失败，回退 CPU 版"
-                & $VenvPy -m pip uninstall -y paddlepaddle-gpu 2>$null
-                Install-PipWithRetry -VenvPy $VenvPy `
-                    -Arguments @("paddlepaddle==3.3.1", $numpyRequirement, "-i", "https://www.paddlepaddle.org.cn/packages/stable/cpu/") `
-                    -FailureMessage "CPU 版 Paddle 安装失败"
-            }
-        }
-    } else {
-        & $VenvPy -m pip uninstall -y paddlepaddle-gpu 2>$null
-        Install-PipWithRetry -VenvPy $VenvPy `
-            -Arguments @("paddlepaddle==3.3.1", $numpyRequirement, "-i", "https://www.paddlepaddle.org.cn/packages/stable/cpu/") `
-            -FailureMessage "CPU 版 Paddle 安装失败"
-    }
-    # 已有 Paddle 符合版本时也要修复旧安装留下的 NumPy 2.4+。
-    Install-PipWithRetry -VenvPy $VenvPy `
-        -Arguments @($numpyRequirement) `
-        -FailureMessage "NumPy 兼容版本安装失败"
-    Write-Ok "Paddle 安装步骤完成"
-}
-
 function Test-PythonDependencies {
     param([string]$VenvPy)
     Write-Step "检查 Python 依赖一致性"
@@ -199,7 +149,8 @@ function Test-PythonDependencies {
 function Ensure-Config {
     param(
         [bool]$UseGpu,
-        [int]$Threads
+        [int]$Threads,
+        [string]$DeviceOverride = ""
     )
     Write-Step "生成 / 更新 config.json"
     $ngl = 0
@@ -214,7 +165,7 @@ function Ensure-Config {
     $script = Join-Path $Root "scripts\setup_config.py"
     $flag = "0"
     if ($UseGpu) { $flag = "1" }
-    & $py $script $Root $flag $Threads $ngl
+    & $py $script $Root $flag $Threads $ngl $DeviceOverride
     if ($LASTEXITCODE -ne 0) { throw "写 config 失败" }
     Write-Ok "config.json 已就绪 (n_gpu_layers=$ngl, threads=$Threads)"
 }
@@ -248,7 +199,7 @@ function Test-Runtime {
         [System.IO.Path]::GetFullPath($defaultModel),
         [System.StringComparison]::OrdinalIgnoreCase
     )
-    $ocr = Join-Path $Root "runtime\paddlex\official_models"
+    $ocr = Join-Path $Root "runtime\ocr"
 
     if (Test-Path -LiteralPath $llama) {
         $oldEap = $ErrorActionPreference
@@ -298,24 +249,33 @@ function Test-Runtime {
         $ok = $false
     }
 
-    $ocrRequired = @("PP-OCRv6_medium_det", "PP-OCRv6_medium_rec")
+    $ocrRequired = @("manifest.json", "det.onnx", "rec.onnx", "characters.txt")
     $ocrReady = $true
     foreach ($name in $ocrRequired) {
-        $dir = Join-Path $ocr $name
-        if (-not (Test-Path -LiteralPath $dir) -or -not (Get-ChildItem -LiteralPath $dir -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+        $file = Join-Path $ocr $name
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
             $ocrReady = $false
         }
     }
     if ($ocrReady) {
-        $names = @(Get-ChildItem -LiteralPath $ocr -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name})
-        Write-Ok ("OCR 模型目录: $ocr (" + ($names -join ", ") + ")")
+        try {
+            $manifest = Get-Content -LiteralPath (Join-Path $ocr "manifest.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+            foreach ($name in @("det.onnx", "rec.onnx", "characters.txt")) {
+                $expected = $manifest.files.$name.sha256
+                $actual = (Get-FileHash -LiteralPath (Join-Path $ocr $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+                if (-not $expected -or $actual -ne $expected.ToLowerInvariant()) { $ocrReady = $false }
+            }
+        } catch { $ocrReady = $false }
+    }
+    if ($ocrReady) {
+        Write-Ok "OCR 模型目录: $ocr"
     } else {
         Write-Err2 "缺少 $ocr"
         $ok = $false
     }
 
     if (-not $ok) {
-        Write-Warn2 "runtime 不齐：请把 Releases 的 paddlex、models、llama 三个压缩包解压到 runtime 目录（也可用 -DownloadRuntime）。"
+        Write-Warn2 "runtime 不齐：请把 Releases 的 ocr、models、llama 三个压缩包解压到 runtime 目录。"
     }
     return $ok
 }
@@ -368,21 +328,24 @@ function Invoke-BuildLauncher {
 }
 
 # ---------------- main ----------------
-Write-Host "ScreenTranslator 一键安装 / 体检" -ForegroundColor White
+Write-Host "本地屏译（LocalScreen Translator）一键安装 / 体检" -ForegroundColor White
 Write-Host "目录: $Root"
 
 $hasNvidia = Test-NvidiaGpu
 if ($CpuOnly) {
     $useGpu = $false
+    $deviceOverride = "cpu"
     Write-Host "模式: 强制 CPU (-CpuOnly)"
 } elseif ($Gpu) {
     $useGpu = $true
+    $deviceOverride = "gpu"
     Write-Host "模式: 强制 GPU (-Gpu)"
     if (-not $hasNvidia) {
-        Write-Warn2 "未检测到 nvidia-smi，仍按 GPU 安装（可能失败）"
+        Write-Warn2 "未检测到 nvidia-smi，仍强制使用 GPU 配置（启动可能失败）"
     }
 } else {
     $useGpu = $hasNvidia
+    $deviceOverride = ""
     if ($useGpu) {
         Write-Host "模式: 自动（检测到 NVIDIA → GPU）"
     } else {
@@ -440,25 +403,9 @@ if (-not (Test-SupportedPython $venvPy)) {
     throw "现有 venv 不是受支持的 Python 3.11～3.13；请删除 venv 后重新运行 setup.ps1"
 }
 Install-PipPackages -VenvPy $venvPy
-Install-Paddle -VenvPy $venvPy -WantGpu $useGpu
 Test-PythonDependencies -VenvPy $venvPy
-Ensure-Config -UseGpu $useGpu -Threads $threads
+Ensure-Config -UseGpu $useGpu -Threads $threads -DeviceOverride $deviceOverride
 Test-Imports -VenvPy $venvPy
-
-if ($DownloadRuntime) {
-    Write-Step "下载 runtime（模型 / llama）"
-    $dl = Join-Path $Root "scripts\download_runtime.ps1"
-    if (-not (Test-Path -LiteralPath $dl)) {
-        Write-Err2 "缺少 $dl"
-    } else {
-        $dlArgs = @()
-        if ($CpuOnly -or -not $useGpu) { $dlArgs += "-CpuOnly" }
-        # 装完 venv 后顺带预热 OCR 缓存
-        $dlArgs += "-WarmOcr"
-        & $dl @dlArgs
-        $runtimeOk = Test-Runtime
-    }
-}
 
 $launcherExe = Join-Path $Root "翻译.exe"
 if ($BuildLauncher -or -not (Test-Path -LiteralPath $launcherExe)) {
@@ -472,8 +419,7 @@ Write-Host ""
 Write-Host '  启动: 双击 翻译.exe  或  venv\Scripts\pythonw.exe run.py'
 Write-Host "  检查: .\setup.ps1 -Check"
 Write-Host "  仅CPU: .\setup.ps1 -CpuOnly"
-Write-Host '  下载资源: .\scripts\download_runtime.ps1  或  .\setup.ps1 -DownloadRuntime'
-Write-Host '  说明: paddlex/models/llama 使用 Release 三个压缩包或脚本下载；venv 需在每台电脑运行本脚本生成'
+Write-Host '  说明: ocr/models/llama 使用 Release 三个压缩包；venv 需在每台电脑运行本脚本生成'
 Write-Host ""
 
 if (-not $runtimeOk) { exit 2 }

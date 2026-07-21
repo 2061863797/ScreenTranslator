@@ -75,6 +75,45 @@ class ModelSettingsTests(unittest.TestCase):
             on_saved.assert_called_once_with()
             self.assertIn("重启软件", show_toast.call_args.args[0])
 
+    def test_translation_device_is_saved_and_requires_restart(self):
+        cfg = dict(DEFAULTS)
+        with (
+            patch("app.ui.windows.available_translation_models", return_value=[]),
+            patch("app.ui.windows.config.save") as save_cfg,
+            patch("app.ui.windows.show_toast") as show_toast,
+            patch("app.hotkeys.find_hotkey_conflicts", return_value=[]),
+        ):
+            window = SettingsWindow(cfg)
+            try:
+                window._llama_device.setCurrentIndex(
+                    window._llama_device.findData("cpu")
+                )
+                window._save()
+            finally:
+                window.close()
+                window.deleteLater()
+                self.qapp.processEvents()
+
+        self.assertEqual(cfg["llama_device"], "cpu")
+        save_cfg.assert_called_once_with(cfg)
+        self.assertIn("重启软件", show_toast.call_args.args[0])
+
+    def test_saved_translation_device_is_restored_without_becoming_auto(self):
+        for device in ("cpu", "gpu"):
+            cfg = dict(DEFAULTS)
+            cfg["llama_device"] = device
+            with patch(
+                "app.ui.windows.available_translation_models",
+                return_value=[],
+            ):
+                window = SettingsWindow(cfg)
+                try:
+                    self.assertEqual(window._llama_device.currentData(), device)
+                finally:
+                    window.close()
+                    window.deleteLater()
+                    self.qapp.processEvents()
+
 
 class MaxTokensSettingsTests(unittest.TestCase):
     @classmethod
@@ -96,14 +135,18 @@ class MaxTokensSettingsTests(unittest.TestCase):
                 presets = [
                     window._max_tokens.itemData(index)
                     for index in range(window._max_tokens.count())
+                    if isinstance(window._max_tokens.itemData(index), int)
                 ]
                 self.assertEqual(
                     presets,
                     [64, 128, 256, 512, 1024, 2048, 4096, 8192],
                 )
-                self.assertEqual(window._max_tokens.currentText(), "700")
+                self.assertIn("预设", window._max_tokens_presets.text())
+                self.assertEqual(window._max_tokens.currentData(), "custom")
+                self.assertFalse(window._max_tokens_custom.isHidden())
+                self.assertEqual(window._max_tokens_custom.value(), 700)
 
-                window._max_tokens.setEditText("768")
+                window._max_tokens_custom.setValue(768)
                 window._save()
             finally:
                 window.close()
@@ -113,24 +156,24 @@ class MaxTokensSettingsTests(unittest.TestCase):
         self.assertEqual(cfg["max_tokens"], 768)
         save_cfg.assert_called_once_with(cfg)
 
-    def test_invalid_custom_value_is_not_saved(self):
+    def test_custom_value_is_constrained_to_valid_range(self):
         cfg = dict(DEFAULTS)
         with (
             patch("app.ui.windows.available_translation_models", return_value=[]),
-            patch("app.ui.windows.config.save") as save_cfg,
-            patch("app.ui.windows.topmost_message") as message,
         ):
             window = SettingsWindow(cfg)
             try:
-                window._max_tokens.setEditText("")
-                window._save()
+                window._max_tokens.setCurrentIndex(
+                    window._max_tokens.findData("custom")
+                )
+                window._max_tokens_custom.setValue(1)
+                self.assertEqual(window._max_tokens_custom.value(), 64)
+                window._max_tokens_custom.setValue(99999)
+                self.assertEqual(window._max_tokens_custom.value(), 8192)
             finally:
                 window.close()
                 window.deleteLater()
                 self.qapp.processEvents()
-
-        save_cfg.assert_not_called()
-        message.assert_called_once()
 
 
 class SetupConfigTests(unittest.TestCase):
@@ -149,6 +192,25 @@ class SetupConfigTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(saved["model_path"], selected)
+
+    def test_setup_removes_legacy_ocr_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.json").write_text(
+                json.dumps({
+                    "ocr_lang": "ch",
+                    "hotkey_silent_ocr": "<alt>+s",
+                }),
+                encoding="utf-8",
+            )
+            argv = ["setup_config.py", str(root), "0", "8", "0"]
+            with patch.object(sys, "argv", argv), patch("builtins.print"):
+                result = setup_config.main()
+            saved = json.loads((root / "config.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result, 0)
+        self.assertNotIn("ocr_lang", saved)
+        self.assertNotIn("hotkey_silent_ocr", saved)
 
 
 if __name__ == "__main__":

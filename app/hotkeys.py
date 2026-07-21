@@ -9,14 +9,19 @@
 
 from __future__ import annotations
 
+import threading
+
 from pynput import keyboard, mouse
 from PySide6.QtCore import QObject, Signal
+
+from .applog import get_logger
+
+_log = get_logger("hotkeys")
 
 _HOTKEY_KEYS = (
     "hotkey_screenshot",
     "hotkey_word",
     "hotkey_window",
-    "hotkey_silent_ocr",
     "hotkey_region_watch",
 )
 
@@ -27,7 +32,6 @@ def _hotkey_label(cfg_key: str) -> str:
         "hotkey_screenshot": "hk_shot",
         "hotkey_word": "hk_word",
         "hotkey_window": "hk_win_full",
-        "hotkey_silent_ocr": "hk_ocr",
         "hotkey_region_watch": "hk_region_full",
     }
     return t(m.get(cfg_key, cfg_key))
@@ -97,7 +101,6 @@ class HotkeyManager(QObject):
     screenshot_triggered = Signal()
     word_triggered = Signal()
     window_triggered = Signal()
-    silent_ocr_triggered = Signal()
     region_watch_triggered = Signal()
 
     def __init__(self, cfg: dict):
@@ -107,8 +110,10 @@ class HotkeyManager(QObject):
         self._mouse_listener: mouse.Listener | None = None
         # (frozenset mods, Button) -> callable
         self._mouse_map: dict[tuple[frozenset, object], object] = {}
-        # 当前按下的修饰键（供侧键组合用）
+        # 当前按下的修饰键（供侧键组合用）；修饰键监听线程写、
+        # 鼠标监听线程读，是两个 pynput 线程，须加锁。
         self._mods_down: set[str] = set()
+        self._mods_lock = threading.Lock()
         self._mod_listener: keyboard.Listener | None = None
         # 设置页录入热键时暂停，避免抢键
         self._paused = False
@@ -122,7 +127,6 @@ class HotkeyManager(QObject):
             self._cfg["hotkey_screenshot"]: self.screenshot_triggered.emit,
             self._cfg["hotkey_word"]: self.word_triggered.emit,
             self._cfg["hotkey_window"]: self.window_triggered.emit,
-            self._cfg["hotkey_silent_ocr"]: self.silent_ocr_triggered.emit,
             self._cfg["hotkey_region_watch"]: self.region_watch_triggered.emit,
         }
         kb_map: dict = {}
@@ -137,21 +141,33 @@ class HotkeyManager(QObject):
                 if parsed not in mouse_map:
                     mouse_map[parsed] = v
             else:
+                # 手工改坏的配置串会让 GlobalHotKeys 构造时抛 ValueError，
+                # 这里先逐条校验，坏的跳过并留日志，不拖垮其余热键。
+                try:
+                    keyboard.HotKey.parse(k)
+                except ValueError:
+                    _log.warning("键盘热键格式无效，已跳过: %r", k)
+                    continue
                 if k not in kb_map:
                     kb_map[k] = v
 
         self._mouse_map = mouse_map
 
         if kb_map:
-            self._kb_listener = keyboard.GlobalHotKeys(kb_map)
-            self._kb_listener.daemon = True
-            self._kb_listener.start()
+            try:
+                self._kb_listener = keyboard.GlobalHotKeys(kb_map)
+                self._kb_listener.daemon = True
+                self._kb_listener.start()
+            except Exception:
+                _log.exception("注册键盘热键失败，键盘热键本次未生效")
+                self._kb_listener = None
 
         if mouse_map:
             # 有修饰键组合时需要跟踪 Ctrl/Alt/Shift
             need_mods = any(mods for mods, _ in mouse_map.keys())
             if need_mods:
-                self._mods_down = set()
+                with self._mods_lock:
+                    self._mods_down = set()
                 self._mod_listener = keyboard.Listener(
                     on_press=self._on_mod_press,
                     on_release=self._on_mod_release,
@@ -202,17 +218,20 @@ class HotkeyManager(QObject):
                 pass
             self._mod_listener = None
         self._mouse_map = {}
-        self._mods_down = set()
+        with self._mods_lock:
+            self._mods_down = set()
 
     def _on_mod_press(self, key):
         token = self._key_to_mod_token(key)
         if token:
-            self._mods_down.add(token)
+            with self._mods_lock:
+                self._mods_down.add(token)
 
     def _on_mod_release(self, key):
         token = self._key_to_mod_token(key)
         if token:
-            self._mods_down.discard(token)
+            with self._mods_lock:
+                self._mods_down.discard(token)
 
     @staticmethod
     def _key_to_mod_token(key) -> str | None:
@@ -234,7 +253,8 @@ class HotkeyManager(QObject):
             return
         if button not in (mouse.Button.x1, mouse.Button.x2):
             return
-        mods = frozenset(self._mods_down)
+        with self._mods_lock:
+            mods = frozenset(self._mods_down)
         # 优先精确匹配当前修饰键；若无匹配再试「仅侧键」
         cb = self._mouse_map.get((mods, button))
         if cb is None and mods:
@@ -243,4 +263,5 @@ class HotkeyManager(QObject):
             try:
                 cb()
             except Exception:
-                pass
+                # 信号 emit 一般不失败；真失败时留日志，别无声丢热键
+                _log.exception("鼠标热键回调异常 button=%s mods=%s", button, set(mods))

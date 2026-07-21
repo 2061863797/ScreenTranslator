@@ -50,6 +50,20 @@ class Storage:
             )
             return cur.fetchall()
 
+    def recent_history_entries(self, limit: int = MAX_HISTORY) -> list[tuple]:
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT id, ts, source, translation, mode FROM history "
+                "ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+            return cur.fetchall()
+
+    def delete_history(self, entry_id: int) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM history WHERE id = ?", (int(entry_id),))
+            self._conn.commit()
+
     def clear_history(self) -> None:
         """只清空翻译历史；不触碰旧版本或其它功能的数据表。"""
         with self._lock:

@@ -8,6 +8,7 @@ from PySide6.QtCore import QThread, Signal
 
 from .applog import get_logger
 from .ocr_engine import OcrEngine
+from .pipelines import OneShotPipeline
 from .translator import Translator
 
 _log = get_logger("worker")
@@ -67,25 +68,23 @@ class OcrTranslateWorker(QThread):
         self._text = text
         self._do_translate = do_translate
         self._target = target_language or cfg["target_language"]
+        self._pipeline = OneShotPipeline(ocr, translator)
 
     def run(self):
         t0 = time.time()
         try:
             if self.isInterruptionRequested():
                 return
-            if self._text is not None:
-                source = self._text.strip()
-                _log.info("worker 文本路径 chars=%d translate=%s", len(source), self._do_translate)
-            else:
-                lines = self._ocr.recognize(self._image)
-                source = OcrEngine.lines_to_text(lines)
-                _log.info(
-                    "worker OCR 行数=%d chars=%d translate=%s",
-                    len(lines), len(source), self._do_translate,
-                )
-
-            if self.isInterruptionRequested():
+            result = self._pipeline.run(
+                image=self._image,
+                text=self._text,
+                translate=self._do_translate,
+                target_language=self._target,
+                cancelled=self.isInterruptionRequested,
+            )
+            if result is None:
                 return
+            source = result.source
 
             if not source:
                 _log.warning("worker 未识别到文字")
@@ -94,12 +93,7 @@ class OcrTranslateWorker(QThread):
                 self.failed.emit(t("msg_no_text"))
                 return
 
-            translation = ""
-            if self._do_translate:
-                translation = self._translator.translate(source, self._target)
-
-            if self.isInterruptionRequested():
-                return
+            translation = result.translation
             _log.info("worker 完成 %.2fs", time.time() - t0)
             self.finished_ok.emit(source, translation)
         except Exception as e:

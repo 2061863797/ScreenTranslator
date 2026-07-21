@@ -2,7 +2,7 @@
 """功能窗口：设置、翻译历史、统一翻译窗口（输入/划词/截屏共用）。"""
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QIntValidator
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -44,7 +44,7 @@ from .theme import (
     SETTINGS_STYLE,
     apply_frameless_float,
 )
-from ..i18n import get_language, set_language, t as _ti
+from ..i18n import get_language, set_qt_language, t as _ti
 from ..i18n import t_lang
 from .topmost import ensure_stays_on_top, raise_to_front, show_toast, topmost_message
 
@@ -253,27 +253,76 @@ def _font_size_combo() -> QComboBox:
     """默认值保留旧字号；其余选项为明确的像素字号。"""
     combo = QComboBox()
     combo.addItem("", 0)
-    for size in range(8, 49):
+    for size in range(12, 21):
         combo.addItem(f"{size} px", size)
     return combo
 
 
 def _max_tokens_combo() -> QComboBox:
-    """常用值可直接选，同时允许输入范围内的任意整数。"""
+    """明确的预设下拉框；自定义值使用旁边的数值框。"""
     combo = QComboBox()
-    combo.setEditable(True)
-    combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
     for value in (64, 128, 256, 512, 1024, 2048, 4096, 8192):
         combo.addItem(str(value), value)
-    combo.setValidator(QIntValidator(64, 8192, combo))
+    combo.addItem("自定义…", "custom")
+    combo.setMinimumWidth(150)
     return combo
 
 
-def _set_combo_data(combo: QComboBox, value, fallback=0) -> None:
+_MONITOR_INTERVAL_PRESETS = (200, 500, 800, 1000, 1500, 2000, 3000, 5000)
+
+
+def _monitor_interval_controls() -> tuple[QComboBox, QSpinBox, QWidget]:
+    """监控间隔预设；非预设值由旁边的数值框承接。"""
+    combo = QComboBox()
+    for value in _MONITOR_INTERVAL_PRESETS:
+        combo.addItem(str(value), value)
+    combo.addItem("自定义…", "custom")
+    combo.setMinimumWidth(150)
+
+    custom = QSpinBox()
+    custom.setRange(200, 5000)
+    custom.setSingleStep(100)
+    custom.setVisible(False)
+
+    widget = QWidget()
+    layout = QHBoxLayout(widget)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(8)
+    layout.addWidget(combo)
+    layout.addWidget(custom)
+    layout.addStretch(1)
+    combo.currentIndexChanged.connect(
+        lambda _index: custom.setVisible(combo.currentData() == "custom")
+    )
+    return combo, custom, widget
+
+
+def _set_monitor_interval(combo: QComboBox, custom: QSpinBox, value) -> None:
     try:
-        index = combo.findData(int(value))
+        interval = int(value)
     except (TypeError, ValueError):
-        index = -1
+        interval = 800
+    index = combo.findData(interval)
+    if index >= 0:
+        combo.setCurrentIndex(index)
+    else:
+        combo.setCurrentIndex(combo.findData("custom"))
+        custom.setValue(interval)
+    custom.setVisible(combo.currentData() == "custom")
+
+
+def _monitor_interval_value(combo: QComboBox, custom: QSpinBox) -> int:
+    value = combo.currentData()
+    return custom.value() if value == "custom" else int(value)
+
+
+def _set_combo_data(combo: QComboBox, value, fallback=0) -> None:
+    index = combo.findData(value)
+    if index < 0:
+        try:
+            index = combo.findData(int(value))
+        except (TypeError, ValueError):
+            index = -1
     if index < 0:
         index = combo.findData(fallback)
     combo.setCurrentIndex(max(0, index))
@@ -283,7 +332,8 @@ def _set_combo_data(combo: QComboBox, value, fallback=0) -> None:
 class SettingsWindow(_DraggableMixin, QWidget):
     """高级设置：侧栏分类 + 卡片内容；支持中/英界面。"""
 
-    def __init__(self, cfg: dict, on_saved=None, hotkey_manager=None):
+    def __init__(self, cfg: dict, on_saved=None, hotkey_manager=None,
+                 on_retry_runtime=None):
         super().__init__()
         apply_frameless_float(self)
         self.resize(780, 560)
@@ -292,6 +342,8 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._cfg = cfg
         self._on_saved = on_saved
         self._hotkey_manager = hotkey_manager
+        self._on_retry_runtime = on_retry_runtime
+        self._runtime_state = {"llama": ("pending", ""), "ocr": ("pending", "")}
         self._log_auto_scroll = True
         self._lang = "en" if str(cfg.get("ui_language", "zh")).lower().startswith("en") else "zh"
 
@@ -307,35 +359,42 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._history_privacy_tip = QLabel()
         self._history_privacy_tip.setWordWrap(True)
         self._history_privacy_tip.setStyleSheet("color:#aaa;font-size:12px;")
+        self._runtime_title = QLabel()
+        self._runtime_title.setStyleSheet("font-weight:600;")
+        self._runtime_text = QLabel()
+        self._runtime_text.setWordWrap(True)
+        self._runtime_retry = QPushButton()
+        self._runtime_retry.clicked.connect(
+            lambda: self._on_retry_runtime() if self._on_retry_runtime else None
+        )
 
         self._hk_shot = HotkeyEdit(cfg["hotkey_screenshot"])
         self._hk_word = HotkeyEdit(cfg["hotkey_word"])
         self._hk_win = HotkeyEdit(cfg["hotkey_window"])
-        self._hk_ocr = HotkeyEdit(cfg["hotkey_silent_ocr"])
         self._hk_region = HotkeyEdit(cfg["hotkey_region_watch"])
         self._hk_edits = (
             self._hk_shot,
             self._hk_word,
             self._hk_win,
-            self._hk_ocr,
             self._hk_region,
         )
         for hk in self._hk_edits:
             hk.recording_changed.connect(self._on_hotkey_recording)
 
-        def _ms_spin() -> QSpinBox:
-            sp = QSpinBox()
-            sp.setRange(200, 5000)
-            sp.setSingleStep(100)
-            sp.setSuffix(" 毫秒")
-            return sp
-
-        self._win_interval = _ms_spin()
+        (
+            self._win_interval,
+            self._win_interval_custom,
+            self._win_interval_widget,
+        ) = _monitor_interval_controls()
         self._win_font_size = _font_size_combo()
         self._win_annotate = QComboBox()
         self._win_annotate.addItem("", False)
         self._win_annotate.addItem("", True)
-        self._reg_interval = _ms_spin()
+        (
+            self._reg_interval,
+            self._reg_interval_custom,
+            self._reg_interval_widget,
+        ) = _monitor_interval_controls()
         self._reg_font_size = _font_size_combo()
         self._reg_annotate = QComboBox()
         self._reg_annotate.addItem("", False)
@@ -354,14 +413,34 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._ann_color_swatch = QLabel()
         self._ann_color_swatch.setFixedSize(22, 22)
         self._ann_color.textChanged.connect(self._refresh_color_swatch)
+        self._ann_capture_visible = QCheckBox()
 
         self._max_tokens = _max_tokens_combo()
+        self._max_tokens_custom = QSpinBox()
+        self._max_tokens_custom.setRange(64, 8192)
+        self._max_tokens_custom.setValue(512)
+        self._max_tokens_custom.setVisible(False)
+        self._max_tokens_presets = QPushButton()
+        self._max_tokens_presets.setObjectName("ghostBtn")
+        self._max_tokens_presets.clicked.connect(self._max_tokens.showPopup)
+        self._max_tokens.currentIndexChanged.connect(self._on_max_tokens_choice)
+        self._max_tokens_widget = QWidget()
+        max_tokens_layout = QHBoxLayout(self._max_tokens_widget)
+        max_tokens_layout.setContentsMargins(0, 0, 0, 0)
+        max_tokens_layout.setSpacing(8)
+        max_tokens_layout.addWidget(self._max_tokens)
+        max_tokens_layout.addWidget(self._max_tokens_presets)
+        max_tokens_layout.addWidget(self._max_tokens_custom)
+        max_tokens_layout.addStretch(1)
 
         self._model_file = QComboBox()
         self._model_file.setMinimumContentsLength(28)
         self._model_note = QLabel()
         self._model_note.setWordWrap(True)
         self._model_note.setStyleSheet("color:#aaa;font-size:12px;")
+        self._llama_device = QComboBox()
+        for value in ("auto", "gpu", "cpu"):
+            self._llama_device.addItem("", value)
 
         self._stack = QStackedWidget()
         self._stack.addWidget(self._page_general())
@@ -449,10 +528,17 @@ class SettingsWindow(_DraggableMixin, QWidget):
         )
         self.reload_from_cfg()
         self._apply_i18n()
+        self._ui_lang.currentIndexChanged.connect(self._preview_ui_language)
         self._load_recent_logs()
 
     def _tr(self, key: str, **kwargs) -> str:
         return t_lang(self._lang, key, **kwargs)
+
+    def _preview_ui_language(self):
+        """在设置页即时预览所选语言，保存后再写入全局配置。"""
+        lang = self._ui_lang.currentData() or "zh"
+        self._lang = "en" if str(lang).lower().startswith("en") else "zh"
+        self._apply_i18n()
 
     def _apply_i18n(self):
         tr = self._tr
@@ -483,17 +569,21 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._translation_font_size.setToolTip(tr("translate_font_size_tip"))
         self._history_enabled.setText(tr("history_enabled"))
         self._history_privacy_tip.setText(tr("history_privacy_tip"))
+        self._runtime_title.setText(tr("runtime_status"))
+        self._runtime_retry.setText(tr("runtime_retry"))
+        self._refresh_runtime_status()
         self._lab_ann_color.setText(tr("ann_color"))
         self._ann_color.setToolTip(tr("ann_color_tip"))
         self._ann_color_btn.setText(tr("ann_color_pick"))
         self._ann_color_swatch.setToolTip(tr("ann_color_preview"))
         self._ann_color_note.setText(tr("ann_color_note"))
+        self._ann_capture_visible.setText(tr("ann_capture_visible"))
+        self._ann_capture_tip.setText(tr("ann_capture_visible_tip"))
 
         self._card_hk_title.setText(tr("card_hotkeys"))
         self._card_hk_hint.setText(tr("card_hotkeys_hint"))
         self._lab_hk_shot.setText(tr("hk_shot"))
         self._lab_hk_word.setText(tr("hk_word"))
-        self._lab_hk_ocr.setText(tr("hk_ocr"))
         self._lab_hk_win.setText(tr("hk_win"))
         self._lab_hk_region.setText(tr("hk_region"))
 
@@ -504,7 +594,7 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._win_font_size.setItemText(0, tr("font_size_default"))
         self._win_font_size.setToolTip(tr("watch_font_size_tip"))
         self._lab_win_mode.setText(tr("display_mode"))
-        self._win_interval.setSuffix(tr("ms_suffix"))
+        self._apply_interval_i18n(self._win_interval, self._win_interval_custom)
         wi = self._win_annotate.currentIndex()
         self._win_annotate.setItemText(0, tr("mode_sub_win"))
         self._win_annotate.setItemText(1, tr("mode_ann_win"))
@@ -522,7 +612,7 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._reg_font_size.setItemText(0, tr("font_size_default"))
         self._reg_font_size.setToolTip(tr("watch_font_size_tip"))
         self._lab_reg_mode.setText(tr("display_mode"))
-        self._reg_interval.setSuffix(tr("ms_suffix"))
+        self._apply_interval_i18n(self._reg_interval, self._reg_interval_custom)
         ri = self._reg_annotate.currentIndex()
         self._reg_annotate.setItemText(0, tr("mode_sub_reg"))
         self._reg_annotate.setItemText(1, tr("mode_ann_reg"))
@@ -542,8 +632,20 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._model_note.setText(
             tr("model_file_note", directory=str(RUNTIME_MODELS))
         )
+        self._lab_llama_device.setText(tr("llama_device"))
+        for index, key in enumerate(("llama_device_auto", "llama_device_gpu", "llama_device_cpu")):
+            self._llama_device.setItemText(index, tr(key))
+        self._llama_device.setToolTip(tr("llama_device_tip"))
         self._lab_max_tokens.setText("max_tokens")
         self._max_tokens.setToolTip(tr("max_tokens_tip"))
+        self._max_tokens_custom.setToolTip(tr("max_tokens_tip"))
+        self._max_tokens_presets.setText(tr("max_tokens_presets"))
+        recommended = self._max_tokens.findData(512)
+        custom = self._max_tokens.findData("custom")
+        if recommended >= 0:
+            self._max_tokens.setItemText(recommended, tr("max_tokens_recommended"))
+        if custom >= 0:
+            self._max_tokens.setItemText(custom, tr("max_tokens_custom"))
 
         self._card_log_title.setText(tr("card_log"))
         self._card_log_hint.setText(tr("card_log_hint", log=LOG_PATH.name))
@@ -571,6 +673,18 @@ class SettingsWindow(_DraggableMixin, QWidget):
         wl.setContentsMargins(0, 0, 0, 0)
         wl.addWidget(scroll)
         return wrap
+
+    def _apply_interval_i18n(self, combo: QComboBox, custom: QSpinBox):
+        suffix = self._tr("ms_suffix")
+        for index in range(combo.count()):
+            value = combo.itemData(index)
+            combo.setItemText(
+                index,
+                self._tr("interval_custom")
+                if value == "custom"
+                else f"{value}{suffix}",
+            )
+        custom.setSuffix(suffix)
 
     def _annotate_color_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -603,9 +717,21 @@ class SettingsWindow(_DraggableMixin, QWidget):
 
     def _pick_annotate_color(self):
         cur = QColor(self._normalize_hex_color(self._ann_color.text()))
-        c = QColorDialog.getColor(cur, self, self._tr("ann_color_dlg"))
-        if c.isValid():
+        set_qt_language(self._lang)
+        dialog = QColorDialog(cur, self)
+        dialog.setWindowTitle(self._tr("ann_color_dlg"))
+        dialog.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog, True)
+        blank_icon = QPixmap(1, 1)
+        blank_icon.fill(Qt.GlobalColor.transparent)
+        dialog.setWindowIcon(QIcon(blank_icon))
+        try:
+            accepted = dialog.exec() == QColorDialog.DialogCode.Accepted
+        finally:
+            set_qt_language(get_language())
+        if accepted:
+            c = dialog.currentColor()
             self._ann_color.setText(c.name(QColor.NameFormat.HexRgb).upper())
+        dialog.deleteLater()
 
     def _page_general(self) -> QWidget:
         card, lay, self._card_general_title, self._card_general_hint = _settings_card("", "")
@@ -623,27 +749,58 @@ class SettingsWindow(_DraggableMixin, QWidget):
         lay.addLayout(r3)
         lay.addWidget(self._history_enabled)
         lay.addWidget(self._history_privacy_tip)
+        lay.addWidget(self._runtime_title)
+        lay.addWidget(self._runtime_text)
+        lay.addWidget(self._runtime_retry, 0, Qt.AlignmentFlag.AlignLeft)
         lay.addLayout(self._annotate_color_row())
         self._ann_color_note = QLabel()
         self._ann_color_note.setWordWrap(True)
         self._ann_color_note.setStyleSheet("color:#aaa;font-size:12px;")
         lay.addWidget(self._ann_color_note)
+        lay.addWidget(self._ann_capture_visible)
+        self._ann_capture_tip = QLabel()
+        self._ann_capture_tip.setWordWrap(True)
+        self._ann_capture_tip.setStyleSheet("color:#aaa;font-size:12px;")
+        lay.addWidget(self._ann_capture_tip)
         return self._wrap_scroll(card)
+
+    def set_runtime_status(self, state: dict):
+        self._runtime_state = dict(state)
+        self._refresh_runtime_status()
+
+    def _refresh_runtime_status(self):
+        if not hasattr(self, "_runtime_text"):
+            return
+        labels = {"llama": self._tr("runtime_llama"), "ocr": self._tr("runtime_ocr")}
+        state_keys = {
+            "pending": "runtime_pending", "ok": "runtime_ok", "fail": "runtime_fail"
+        }
+        lines = []
+        failed = False
+        for key in ("llama", "ocr"):
+            value = self._runtime_state.get(key, ("pending", ""))
+            status, detail = value if isinstance(value, tuple) else (value, "")
+            failed = failed or status == "fail"
+            line = f"{labels[key]}：{self._tr(state_keys.get(status, 'runtime_pending'))}"
+            if detail:
+                line += f"（{detail}）"
+            lines.append(line)
+        self._runtime_text.setText("\n".join(lines))
+        self._runtime_retry.setVisible(failed)
 
     def _page_hotkeys(self) -> QWidget:
         card, lay, self._card_hk_title, self._card_hk_hint = _settings_card("", "")
         r1, self._lab_hk_shot = _form_row("", self._hk_shot)
         r2, self._lab_hk_word = _form_row("", self._hk_word)
-        r3, self._lab_hk_ocr = _form_row("", self._hk_ocr)
-        r4, self._lab_hk_win = _form_row("", self._hk_win)
-        r5, self._lab_hk_region = _form_row("", self._hk_region)
-        for r in (r1, r2, r3, r4, r5):
+        r3, self._lab_hk_win = _form_row("", self._hk_win)
+        r4, self._lab_hk_region = _form_row("", self._hk_region)
+        for r in (r1, r2, r3, r4):
             lay.addLayout(r)
         return self._wrap_scroll(card)
 
     def _page_window(self) -> QWidget:
         card, lay, self._card_win_title, self._card_win_hint = _settings_card("", "")
-        r1, self._lab_win_interval = _form_row("", self._win_interval)
+        r1, self._lab_win_interval = _form_row("", self._win_interval_widget)
         r2, self._lab_win_font_size = _form_row("", self._win_font_size)
         r3, self._lab_win_mode = _form_row("", self._win_annotate)
         lay.addLayout(r1)
@@ -655,7 +812,7 @@ class SettingsWindow(_DraggableMixin, QWidget):
 
     def _page_region(self) -> QWidget:
         card, lay, self._card_reg_title, self._card_reg_hint = _settings_card("", "")
-        r1, self._lab_reg_interval = _form_row("", self._reg_interval)
+        r1, self._lab_reg_interval = _form_row("", self._reg_interval_widget)
         r2, self._lab_reg_font_size = _form_row("", self._reg_font_size)
         r3, self._lab_reg_mode = _form_row("", self._reg_annotate)
         lay.addLayout(r1)
@@ -668,10 +825,12 @@ class SettingsWindow(_DraggableMixin, QWidget):
     def _page_advanced(self) -> QWidget:
         card, lay, self._card_adv_title, self._card_adv_hint = _settings_card("", "")
         r0, self._lab_model_file = _form_row("", self._model_file)
-        r1, self._lab_max_tokens = _form_row("max_tokens", self._max_tokens)
+        r1, self._lab_llama_device = _form_row("", self._llama_device)
+        r2, self._lab_max_tokens = _form_row("max_tokens", self._max_tokens_widget)
         lay.addLayout(r0)
         lay.addWidget(self._model_note)
         lay.addLayout(r1)
+        lay.addLayout(r2)
         return self._wrap_scroll(card)
 
     def _page_log(self) -> QWidget:
@@ -769,14 +928,21 @@ class SettingsWindow(_DraggableMixin, QWidget):
         self._hk_shot.set_value(cfg["hotkey_screenshot"])
         self._hk_word.set_value(cfg["hotkey_word"])
         self._hk_win.set_value(cfg["hotkey_window"])
-        self._hk_ocr.set_value(cfg["hotkey_silent_ocr"])
         self._hk_region.set_value(cfg["hotkey_region_watch"])
-        self._win_interval.setValue(int(cfg.get("window_watch_interval_ms", 800)))
+        _set_monitor_interval(
+            self._win_interval,
+            self._win_interval_custom,
+            cfg.get("window_watch_interval_ms", 800),
+        )
         _set_combo_data(self._win_font_size, cfg.get("window_watch_font_size", 0))
         self._win_annotate.setCurrentIndex(
             1 if cfg.get("window_watch_annotate") else 0
         )
-        self._reg_interval.setValue(int(cfg.get("region_watch_interval_ms", 800)))
+        _set_monitor_interval(
+            self._reg_interval,
+            self._reg_interval_custom,
+            cfg.get("region_watch_interval_ms", 800),
+        )
         _set_combo_data(self._reg_font_size, cfg.get("region_watch_font_size", 0))
         self._reg_annotate.setCurrentIndex(
             1 if cfg.get("region_watch_annotate") else 0
@@ -791,14 +957,24 @@ class SettingsWindow(_DraggableMixin, QWidget):
             self._normalize_hex_color(str(cfg.get("annotate_text_color", "#00F0FF")))
         )
         self._refresh_color_swatch()
+        self._ann_capture_visible.setChecked(
+            bool(cfg.get("annotate_capture_visible"))
+        )
         self._reload_model_choices()
+        _set_combo_data(self._llama_device, cfg.get("llama_device", "auto"))
         max_tokens = int(cfg.get("max_tokens", 512))
         max_tokens_index = self._max_tokens.findData(max_tokens)
         if max_tokens_index >= 0:
             self._max_tokens.setCurrentIndex(max_tokens_index)
         else:
-            self._max_tokens.setCurrentIndex(-1)
-            self._max_tokens.setEditText(str(max_tokens))
+            self._max_tokens.setCurrentIndex(self._max_tokens.findData("custom"))
+            self._max_tokens_custom.setValue(max_tokens)
+        self._on_max_tokens_choice()
+
+    def _on_max_tokens_choice(self, _index: int = -1):
+        self._max_tokens_custom.setVisible(
+            self._max_tokens.currentData() == "custom"
+        )
 
     @staticmethod
     def _model_path_key(value: str) -> str:
@@ -867,10 +1043,12 @@ class SettingsWindow(_DraggableMixin, QWidget):
 
         lang = self._ui_lang.currentData() or "zh"
         self._lang = "en" if str(lang).startswith("en") else "zh"
-        try:
-            max_tokens = int(self._max_tokens.currentText().strip())
-        except (TypeError, ValueError):
-            max_tokens = 0
+        selected_tokens = self._max_tokens.currentData()
+        max_tokens = (
+            self._max_tokens_custom.value()
+            if selected_tokens == "custom"
+            else int(selected_tokens)
+        )
         if not 64 <= max_tokens <= 8192:
             topmost_message(
                 "warning",
@@ -880,6 +1058,9 @@ class SettingsWindow(_DraggableMixin, QWidget):
             )
             return
         old_model = str(self._cfg.get("model_path") or "").strip()
+        old_device = str(self._cfg.get("llama_device", "auto")).lower()
+        selected_device = str(self._llama_device.currentData() or "auto").lower()
+        device_changed = selected_device != old_device
         selected_model = str(self._model_file.currentData() or "").strip()
         model_changed = bool(
             selected_model
@@ -903,18 +1084,23 @@ class SettingsWindow(_DraggableMixin, QWidget):
             "hotkey_screenshot": self._hk_shot.value,
             "hotkey_word": self._hk_word.value,
             "hotkey_window": self._hk_win.value,
-            "hotkey_silent_ocr": self._hk_ocr.value,
             "hotkey_region_watch": self._hk_region.value,
-            "window_watch_interval_ms": self._win_interval.value(),
+            "window_watch_interval_ms": _monitor_interval_value(
+                self._win_interval, self._win_interval_custom
+            ),
             "window_watch_font_size": int(self._win_font_size.currentData() or 0),
             "window_watch_annotate": self._win_annotate.currentData(),
             "window_annotate_skip_target_lang": self._win_skip_target.isChecked(),
-            "region_watch_interval_ms": self._reg_interval.value(),
+            "region_watch_interval_ms": _monitor_interval_value(
+                self._reg_interval, self._reg_interval_custom
+            ),
             "region_watch_font_size": int(self._reg_font_size.currentData() or 0),
             "region_watch_annotate": self._reg_annotate.currentData(),
             "region_annotate_skip_target_lang": self._reg_skip_target.isChecked(),
             "annotate_text_color": self._normalize_hex_color(self._ann_color.text()),
+            "annotate_capture_visible": self._ann_capture_visible.isChecked(),
             "max_tokens": max_tokens,
+            "llama_device": selected_device,
         }
         if selected_model:
             draft["model_path"] = to_portable_path(selected_model)
@@ -934,7 +1120,7 @@ class SettingsWindow(_DraggableMixin, QWidget):
             self._on_saved()
         geo = self.frameGeometry()
         toast_msg = self._tr(
-            "saved_restart_toast" if model_changed else "saved_toast"
+            "saved_restart_toast" if model_changed or device_changed else "saved_toast"
         )
         self.hide()
         show_toast(toast_msg, at_rect=geo, msec=1500)
@@ -964,6 +1150,14 @@ class HistoryWindow(_DraggableMixin, QWidget):
         self._table.cellDoubleClicked.connect(self._on_double_click)
 
         self._tip = QLabel()
+        self._search = QLineEdit()
+        self._search.textChanged.connect(self._filter_history)
+        self._btn_copy_src = QPushButton()
+        self._btn_copy_src.clicked.connect(lambda: self._copy_selected(0))
+        self._btn_copy_dst = QPushButton()
+        self._btn_copy_dst.clicked.connect(lambda: self._copy_selected(1))
+        self._btn_delete = QPushButton()
+        self._btn_delete.clicked.connect(self._delete_selected)
         self._btn_clear = QPushButton()
         self._btn_clear.clicked.connect(self._clear_history)
 
@@ -985,6 +1179,12 @@ class HistoryWindow(_DraggableMixin, QWidget):
         inner.setContentsMargins(12, 10, 12, 10)
         inner.setSpacing(8)
         inner.addLayout(title_bar)
+        tools = QHBoxLayout()
+        tools.addWidget(self._search, stretch=1)
+        tools.addWidget(self._btn_copy_src)
+        tools.addWidget(self._btn_copy_dst)
+        tools.addWidget(self._btn_delete)
+        inner.addLayout(tools)
         inner.addWidget(self._table, stretch=1)
         inner.addWidget(self._tip)
         grip_row = QHBoxLayout()
@@ -1004,16 +1204,53 @@ class HistoryWindow(_DraggableMixin, QWidget):
         self._title_lbl.setText(_ti("hist_title"))
         self._tip.setText(_ti("hist_tip"))
         self._btn_clear.setText(_ti("hist_clear"))
+        self._search.setPlaceholderText(_ti("hist_search"))
+        self._btn_copy_src.setText(_ti("hist_copy_src"))
+        self._btn_copy_dst.setText(_ti("hist_copy_dst"))
+        self._btn_delete.setText(_ti("hist_delete"))
         self._table.setHorizontalHeaderLabels([_ti("hist_src"), _ti("hist_dst")])
 
     def showEvent(self, event):
         self.apply_ui_language()
-        rows = [(r[1], r[2]) for r in self._storage.recent_history()]
+        rows = self._storage.recent_history_entries()
         self._table.setRowCount(len(rows))
-        for r, (src, dst) in enumerate(rows):
-            self._table.setItem(r, 0, QTableWidgetItem(src))
+        for r, (entry_id, _ts, src, dst, _mode) in enumerate(rows):
+            src_item = QTableWidgetItem(src)
+            src_item.setData(Qt.ItemDataRole.UserRole, entry_id)
+            self._table.setItem(r, 0, src_item)
             self._table.setItem(r, 1, QTableWidgetItem(dst))
+        self._filter_history(self._search.text())
         super().showEvent(event)
+
+    def _filter_history(self, query: str):
+        needle = (query or "").strip().casefold()
+        for row in range(self._table.rowCount()):
+            text = " ".join(
+                self._table.item(row, col).text()
+                for col in range(2) if self._table.item(row, col)
+            ).casefold()
+            self._table.setRowHidden(row, bool(needle and needle not in text))
+
+    def _copy_selected(self, column: int):
+        row = self._table.currentRow()
+        item = self._table.item(row, column) if row >= 0 else None
+        if item:
+            QApplication.clipboard().setText(item.text())
+
+    def _delete_selected(self):
+        row = self._table.currentRow()
+        item = self._table.item(row, 0) if row >= 0 else None
+        if item is None:
+            return
+        answer = QMessageBox.question(
+            self, _ti("hist_delete"), _ti("hist_delete_confirm"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._storage.delete_history(item.data(Qt.ItemDataRole.UserRole))
+        self._table.removeRow(row)
 
     def _clear_history(self):
         answer = QMessageBox.question(
@@ -1104,11 +1341,15 @@ class InputTranslateWindow(_DraggableMixin, QWidget):
         self._btn_pin.setCheckable(True)
         self._btn_pin.toggled.connect(self._toggle_pin)
         self._btn_go = QPushButton()
-        self._btn_copy = QPushButton()
+        self._lab_source = QLabel()
+        self._lab_translation = QLabel()
+        self._btn_copy_source = QPushButton()
+        self._btn_copy_translation = QPushButton()
         btn_close = QPushButton("×")
         btn_close.setFixedWidth(28)
         self._btn_go.clicked.connect(self._go)
-        self._btn_copy.clicked.connect(self._copy)
+        self._btn_copy_source.clicked.connect(self._copy_source)
+        self._btn_copy_translation.clicked.connect(self._copy_translation)
         btn_close.clicked.connect(self.hide)
 
         bar = QHBoxLayout()
@@ -1117,16 +1358,29 @@ class InputTranslateWindow(_DraggableMixin, QWidget):
         bar.addWidget(self._lang)
         bar.addStretch()
         bar.addWidget(self._btn_go)
-        bar.addWidget(self._btn_copy)
         bar.addWidget(self._btn_pin)
         bar.addWidget(btn_close)
+
+        source_bar = QHBoxLayout()
+        source_bar.setContentsMargins(0, 0, 0, 0)
+        source_bar.addWidget(self._lab_source)
+        source_bar.addStretch()
+        source_bar.addWidget(self._btn_copy_source)
+
+        translation_bar = QHBoxLayout()
+        translation_bar.setContentsMargins(0, 0, 0, 0)
+        translation_bar.addWidget(self._lab_translation)
+        translation_bar.addStretch()
+        translation_bar.addWidget(self._btn_copy_translation)
 
         # 内容容器：与实时字幕条相同的半透明底
         container = QWidget()
         container.setObjectName("panel")
         inner = QVBoxLayout(container)
         inner.addLayout(bar)
+        inner.addLayout(source_bar)
         inner.addWidget(self._input)
+        inner.addLayout(translation_bar)
         inner.addWidget(self._output)
         # 右下角拖拽调整窗口大小
         grip_row = QHBoxLayout()
@@ -1158,8 +1412,11 @@ class InputTranslateWindow(_DraggableMixin, QWidget):
         self._lab_to.setText(_ti("tw_to"))
         self._input.setPlaceholderText(_ti("tw_placeholder"))
         self._output.setPlaceholderText(_ti("tw_out_ph"))
+        self._lab_source.setText(_ti("tw_source"))
+        self._lab_translation.setText(_ti("tw_translation"))
         self._btn_go.setText(_ti("tw_translate"))
-        self._btn_copy.setText(_ti("tw_copy"))
+        self._btn_copy_source.setText(_ti("tw_copy"))
+        self._btn_copy_translation.setText(_ti("tw_copy"))
         self._btn_pin.setText(
             _ti("tw_pinned") if self._pinned else _ti("tw_pin")
         )
@@ -1195,7 +1452,7 @@ class InputTranslateWindow(_DraggableMixin, QWidget):
             (self._output, self._default_output_font),
         ):
             font = QFont(default_font)
-            if 8 <= size <= 48:
+            if 12 <= size <= 20:
                 font.setPixelSize(size)
             widget.setFont(font)
 
@@ -1213,6 +1470,7 @@ class InputTranslateWindow(_DraggableMixin, QWidget):
         """划词/截屏结果送入本窗口。未固定时移动到触发位置附近（支持多屏）。"""
         self._input.setPlainText(source)
         self._output.setPlainText(translation)
+        self._remembered_geometry = True
         if not self._pinned and near_x is not None and near_y is not None:
             from PySide6.QtCore import QPoint
 
@@ -1251,5 +1509,14 @@ class InputTranslateWindow(_DraggableMixin, QWidget):
             return self._worker
         return None
 
-    def _copy(self):
-        QApplication.clipboard().setText(self._output.toPlainText())
+    def _copy_source(self):
+        self._copy_text(self._input.toPlainText(), "tw_copied_source")
+
+    def _copy_translation(self):
+        self._copy_text(self._output.toPlainText(), "tw_copied_translation")
+
+    def _copy_text(self, text: str, message_key: str):
+        if not text:
+            return
+        QApplication.clipboard().setText(text)
+        show_toast(_ti(message_key), near=self, msec=1200)

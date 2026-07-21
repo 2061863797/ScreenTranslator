@@ -6,15 +6,10 @@ config.json
 # —— runtime 大文件与本机生成的 Release 附件 ——
 runtime/models/
 runtime/llama/
-runtime/paddlex.zip
+runtime/ocr/
+runtime/ocr.zip
 runtime/models.zip
 runtime/llama.zip
-# PaddleX 程序代码保留在仓库中；OCR 官方模型仅由 Release paddlex 压缩包提供
-runtime/paddlex/official_models/
-runtime/paddlex/func_ret/
-runtime/paddlex/locks/
-runtime/paddlex/temp/
-runtime/paddlex/**/.cache/
 # 保留 runtime/README.md、runtime/README.en.md
 
 # —— 用户数据与日志 ——
@@ -40,6 +35,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.tmp/
 *.egg-info/
 .eggs/
 
@@ -50,3 +46,7 @@ __pycache__/
 *.swp
 .DS_Store
 Thumbs.db
+
+# —— 本机 AI 协作说明（不入库） ——
+AGENTS.md
+.agents/

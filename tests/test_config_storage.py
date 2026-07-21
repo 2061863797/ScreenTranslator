@@ -32,12 +32,12 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(loaded["server_port"], 8080)
         self.assertIs(loaded["history_enabled"], True)
 
-    def test_font_sizes_accept_default_or_8_to_48_pixels(self):
+    def test_font_sizes_accept_default_or_12_to_20_pixels(self):
         config.CONFIG_PATH.write_text(
             json.dumps({
-                "translate_window_font_size": 7,
+                "translate_window_font_size": 11,
                 "window_watch_font_size": 20,
-                "region_watch_font_size": 49,
+                "region_watch_font_size": 21,
             }),
             encoding="utf-8",
         )
@@ -53,6 +53,14 @@ class ConfigTests(unittest.TestCase):
         )
         loaded = config.load()
         self.assertEqual(loaded["max_tokens"], 512)
+
+    def test_removed_screenshot_ocr_hotkey_is_ignored(self):
+        config.CONFIG_PATH.write_text(
+            json.dumps({"hotkey_silent_ocr": "<alt>+s"}),
+            encoding="utf-8",
+        )
+        loaded = config.load()
+        self.assertNotIn("hotkey_silent_ocr", loaded)
 
     def test_save_is_atomic_and_readable(self):
         data = dict(config.DEFAULTS)

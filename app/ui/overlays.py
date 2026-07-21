@@ -137,6 +137,7 @@ class SubtitleBar(_CaptureAllowedMixin, QWidget):
     mode_changed = Signal(str)  # follow / free / pinned
     stop_requested = Signal()   # 用户点关闭，停止持续翻译
     switch_to_annotate = Signal()  # 运行中切换到备注模式
+    pause_changed = Signal(bool)
 
     _PAD = 10
     _SCROLL_W = 14
@@ -181,12 +182,13 @@ class SubtitleBar(_CaptureAllowedMixin, QWidget):
                 _allow_capture(w)
 
     def restack_layer(self) -> None:
-        """目标窗 z 变化后重贴（仅窗口翻译）。"""
-        if not self._layer_owner:
-            return
+        """窗口模式贴回 owner；区域模式重新置于 TOPMOST 层最前。"""
         for w in self.layer_widgets():
             if w.isVisible():
-                restack_above_owner(w, self._layer_owner)
+                if self._layer_owner:
+                    restack_above_owner(w, self._layer_owner)
+                else:
+                    set_overlay_layer(w, None)
 
     def apply_ui_language(self):
         self._ctrl.apply_ui_language()
@@ -196,6 +198,10 @@ class SubtitleBar(_CaptureAllowedMixin, QWidget):
             pass
         self._place_chrome()
 
+    def set_paused(self, paused: bool):
+        self._ctrl.set_paused(paused)
+        self._place_chrome()
+
     def set_font_size(self, size) -> None:
         """设置字幕字号；0 或无效值恢复原有默认字号。"""
         try:
@@ -203,7 +209,7 @@ class SubtitleBar(_CaptureAllowedMixin, QWidget):
         except (TypeError, ValueError):
             requested = 0
         resolved = (
-            requested if 8 <= requested <= 48 else self._DEFAULT_FONT_SIZE
+            requested if 12 <= requested <= 20 else self._DEFAULT_FONT_SIZE
         )
         if self._font.pixelSize() == resolved:
             return
@@ -402,8 +408,7 @@ class SubtitleBar(_CaptureAllowedMixin, QWidget):
         self._reflow_text()
         self._place_chrome()
         self._show_chrome()
-        if self._layer_owner:
-            self.restack_layer()
+        self.restack_layer()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -555,6 +560,11 @@ class _SubtitleCtrl(_CaptureAllowedMixin, QWidget):
         self._btn_ann.setFixedHeight(20)
         self._btn_ann.clicked.connect(self._bar.switch_to_annotate.emit)
         lay.addWidget(self._btn_ann)
+        self._btn_pause = QPushButton()
+        self._btn_pause.setCheckable(True)
+        self._btn_pause.setFixedHeight(20)
+        self._btn_pause.toggled.connect(self._bar.pause_changed.emit)
+        lay.addWidget(self._btn_pause)
         self._btn_close = QPushButton()
         self._btn_close.setFixedHeight(20)
         self._btn_close.clicked.connect(self._bar.stop_requested.emit)
@@ -573,9 +583,18 @@ class _SubtitleCtrl(_CaptureAllowedMixin, QWidget):
         self._btns["pinned"].setText(_t("sub_pinned"))
         self._btn_ann.setText(_t("sub_annotate"))
         self._btn_ann.setToolTip(_t("sub_annotate_tip"))
+        self._btn_pause.setText(
+            _t("sub_resume") if self._btn_pause.isChecked() else _t("sub_pause")
+        )
         self._btn_close.setText(_t("sub_close"))
         self._btn_close.setToolTip(_t("sub_close_tip"))
         self.adjustSize()
+
+    def set_paused(self, paused: bool):
+        self._btn_pause.blockSignals(True)
+        self._btn_pause.setChecked(bool(paused))
+        self._btn_pause.blockSignals(False)
+        self.apply_ui_language()
 
     def sync_checked(self, mode: str):
         for k, btn in self._btns.items():
@@ -644,8 +663,12 @@ class _RegionCtrl(_CaptureAllowedMixin, QWidget):
             _allow_capture(self)
 
     def restack_layer(self) -> None:
-        if self._layer_owner and self.isVisible():
+        if not self.isVisible():
+            return
+        if self._layer_owner:
             restack_above_owner(self, self._layer_owner)
+        else:
+            set_overlay_layer(self, None)
 
     def _sync_pin_text(self):
         on = self._frame.pinned
@@ -670,9 +693,7 @@ class _RegionCtrl(_CaptureAllowedMixin, QWidget):
         _show_once(self)
         if first:
             _allow_capture(self)
-        # 区域识别框控制条保持自身 raise；窗口层由 set_layer_owner 管
-        if not self._layer_owner:
-            self.raise_()
+        self.restack_layer()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and not self._frame.pinned:
@@ -728,6 +749,13 @@ class RegionWatchFrame(_CaptureAllowedMixin, QWidget):
         self._place_ctrl()
         self.update()
 
+    def restack_layer(self) -> None:
+        """识别框和控制条始终处在全局 TOPMOST 层最前，且不抢焦点。"""
+        for widget in (self, self._ctrl):
+            if widget.isVisible():
+                set_overlay_layer(widget, None)
+                _allow_capture(widget)
+
     def show_region(self, rect: tuple[int, int, int, int], *, pinned: bool = False):
         """显示 OCR 识别区描边；控制条贴在区域上方外侧。"""
         x, y, w, h = rect
@@ -746,6 +774,7 @@ class RegionWatchFrame(_CaptureAllowedMixin, QWidget):
             _allow_capture(self)
         self._ctrl._sync_pin_text()
         self._place_ctrl()
+        self.restack_layer()
         self.update()
 
     def _place_ctrl(self):
@@ -936,6 +965,7 @@ class AnnotateCtrl(_CaptureAllowedMixin, QWidget):
     stop_requested = Signal()
     skip_target_changed = Signal(bool)  # 不翻译已是目标语言的文字
     switch_to_subtitle = Signal()  # 运行中切换到字幕条模式
+    pause_changed = Signal(bool)
 
     def __init__(self):
         super().__init__()
@@ -957,6 +987,11 @@ class AnnotateCtrl(_CaptureAllowedMixin, QWidget):
         self._btn_skip.setFixedHeight(20)
         self._btn_skip.clicked.connect(self._on_skip_clicked)
         lay.addWidget(self._btn_skip)
+        self._btn_pause = QPushButton()
+        self._btn_pause.setCheckable(True)
+        self._btn_pause.setFixedHeight(20)
+        self._btn_pause.toggled.connect(self.pause_changed.emit)
+        lay.addWidget(self._btn_pause)
         self._btn_close = QPushButton()
         self._btn_close.setFixedHeight(20)
         self._btn_close.clicked.connect(self.stop_requested.emit)
@@ -974,9 +1009,18 @@ class AnnotateCtrl(_CaptureAllowedMixin, QWidget):
         self._btn_sub.setToolTip(_t("ann_subtitle_tip"))
         self._btn_skip.setText(_t("ann_skip"))
         self._btn_skip.setToolTip(_t("ann_skip_tip"))
+        self._btn_pause.setText(
+            _t("sub_resume") if self._btn_pause.isChecked() else _t("sub_pause")
+        )
         self._btn_close.setText(_t("sub_close"))
         self._btn_close.setToolTip(_t("ann_close_tip"))
         self.adjustSize()
+
+    def set_paused(self, paused: bool):
+        self._btn_pause.blockSignals(True)
+        self._btn_pause.setChecked(bool(paused))
+        self._btn_pause.blockSignals(False)
+        self.apply_ui_language()
 
     def set_layer_owner(self, owner_hwnd: int | None) -> None:
         self._layer_owner = int(owner_hwnd) if owner_hwnd else None
@@ -985,8 +1029,12 @@ class AnnotateCtrl(_CaptureAllowedMixin, QWidget):
             _allow_capture(self)
 
     def restack_layer(self) -> None:
-        if self._layer_owner and self.isVisible():
+        if not self.isVisible():
+            return
+        if self._layer_owner:
             restack_above_owner(self, self._layer_owner)
+        else:
+            set_overlay_layer(self, None)
 
     def _on_skip_clicked(self):
         self.skip_target_changed.emit(self._btn_skip.isChecked())
@@ -1010,8 +1058,7 @@ class AnnotateCtrl(_CaptureAllowedMixin, QWidget):
         _show_once(self)
         if first:
             _allow_capture(self)
-        if self._layer_owner:
-            restack_above_owner(self, self._layer_owner)
+        self.restack_layer()
 
 
 class AnnotationOverlay(_CaptureAllowedMixin, QWidget):
@@ -1033,16 +1080,39 @@ class AnnotationOverlay(_CaptureAllowedMixin, QWidget):
         self._text_color = QColor("#00F0FF")
         self._font_size = self._DEFAULT_FONT_SIZE
         self._layer_owner: int | None = None
+        # 是否允许系统截图/录屏拍到译文。关闭（默认配置）时浮层从屏幕
+        # 捕获排除，区域备注的 OCR 抓屏天然看不到译文，无需遮罩还原。
+        self._capture_visible = True
+
+    def set_capture_visible(self, visible: bool) -> None:
+        """备注译文是否参与屏幕捕获；立即应用到当前原生窗口。"""
+        self._capture_visible = bool(visible)
+        self._apply_capture_affinity()
+
+    def _apply_capture_affinity(self) -> None:
+        if self._capture_visible:
+            _allow_capture(self)
+        else:
+            _exclude_from_capture(self)
+
+    def showEvent(self, event: QShowEvent):
+        # 覆盖 mixin 的「显示即允许捕获」：按开关决定显示亲和性
+        QWidget.showEvent(self, event)
+        self._apply_capture_affinity()
 
     def set_layer_owner(self, owner_hwnd: int | None) -> None:
         self._layer_owner = int(owner_hwnd) if owner_hwnd else None
         set_overlay_layer(self, self._layer_owner)
         if self.isVisible():
-            _allow_capture(self)
+            self._apply_capture_affinity()
 
     def restack_layer(self) -> None:
-        if self._layer_owner and self.isVisible():
+        if not self.isVisible():
+            return
+        if self._layer_owner:
             restack_above_owner(self, self._layer_owner)
+        else:
+            set_overlay_layer(self, None)
 
     def set_text_color(self, color) -> None:
         """备注译文颜色：#RRGGBB 字符串或 QColor。"""
@@ -1062,7 +1132,7 @@ class AnnotationOverlay(_CaptureAllowedMixin, QWidget):
         except (TypeError, ValueError):
             requested = 0
         resolved = (
-            requested if 8 <= requested <= 48 else self._DEFAULT_FONT_SIZE
+            requested if 12 <= requested <= 20 else self._DEFAULT_FONT_SIZE
         )
         if self._font_size == resolved:
             return
@@ -1080,9 +1150,8 @@ class AnnotationOverlay(_CaptureAllowedMixin, QWidget):
         first = not self.isVisible()
         _show_once(self)
         if first:
-            _allow_capture(self)
-        if self._layer_owner:
-            restack_above_owner(self, self._layer_owner)
+            self._apply_capture_affinity()
+        self.restack_layer()
         self.update()
 
     def clear(self):

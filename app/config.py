@@ -25,6 +25,7 @@ DEFAULTS = {
     "model_path": DEFAULT_MODEL_REL,
     "server_host": "127.0.0.1",
     "server_port": 8080,
+    "llama_device": "auto",       # auto / gpu / cpu
     "n_gpu_layers": 99,
     "threads": 8,
     # 翻译场景 prompt 短：2048 足够，比 4096 省 KV/显存、冷启动更快
@@ -51,9 +52,15 @@ DEFAULTS = {
     "history_enabled": True,
     # 0=沿用原有默认；非 0 为正文像素字号
     "translate_window_font_size": 0,
+    "settings_window_geometry": [],
+    "history_window_geometry": [],
+    "translate_window_geometry": [],
+    "subtitle_geometry": [],
+    "subtitle_mode": "follow",
 
     # OCR
-    "ocr_lang": None,                # None = PP-OCRv5 自动多语种
+    "ocr_provider": "auto",         # auto = DirectML 优先，失败时回退 CPU
+    "ocr_device_id": 0,
     # 识别前长边缩放到此像素（0=不缩放）；4K 截屏可明显降 OCR 耗时
     "ocr_max_side": 1600,
     # 低于此置信度的 OCR 行丢弃（0~1，0=不丢）
@@ -63,7 +70,6 @@ DEFAULTS = {
     "hotkey_screenshot": "<alt>+q",  # 截屏翻译
     "hotkey_word": "<alt>+w",        # 划词翻译
     "hotkey_window": "<alt>+e",      # 窗口持续翻译
-    "hotkey_silent_ocr": "<alt>+s",  # 截图取字（不翻译）
     "hotkey_region_watch": "<alt>+r",  # 框选区域实时翻译
 
     # 窗口持续翻译（与区域分开）
@@ -83,6 +89,10 @@ DEFAULTS = {
 
     # 备注模式译文颜色（窗口/区域共用，#RRGGBB）
     "annotate_text_color": "#00F0FF",
+    # 备注译文是否出现在系统截屏/录屏中（窗口/区域共用）。
+    # 关闭（默认）：浮层从屏幕捕获排除，区域备注无需遮罩还原底图，响应最快；
+    # 开启：录屏能拍到译文，区域备注每帧额外还原底图，稍慢。
+    "annotate_capture_visible": False,
 }
 
 
@@ -126,6 +136,8 @@ def _validated_values(raw: object) -> dict:
     if not isinstance(raw, dict):
         raise ValueError("config.json 顶层必须是 JSON 对象")
     out = dict(raw)
+    out.pop("ocr_lang", None)
+    out.pop("hotkey_silent_ocr", None)
     for key, default in DEFAULTS.items():
         if key not in raw:
             continue
@@ -141,6 +153,11 @@ def _validated_values(raw: object) -> dict:
             valid = isinstance(value, (int, float)) and not isinstance(value, bool)
         elif isinstance(default, str):
             valid = isinstance(value, str)
+        elif isinstance(default, list):
+            valid = (
+                isinstance(value, list) and len(value) in (0, 4)
+                and all(isinstance(item, int) for item in value)
+            )
         if not valid:
             _log.warning("配置项 %s 类型无效，使用默认值", key)
             out.pop(key, None)
@@ -149,6 +166,14 @@ def _validated_values(raw: object) -> dict:
         out.pop("server_port")
     if "max_tokens" in out and not 64 <= out["max_tokens"] <= 8192:
         out.pop("max_tokens")
+    if "ocr_provider" in out and out["ocr_provider"].lower() not in ("auto", "dml", "cpu"):
+        out.pop("ocr_provider")
+    if "llama_device" in out and out["llama_device"].lower() not in ("auto", "gpu", "cpu"):
+        out.pop("llama_device")
+    if "subtitle_mode" in out and out["subtitle_mode"] not in ("follow", "free", "pinned"):
+        out.pop("subtitle_mode")
+    if "ocr_device_id" in out and out["ocr_device_id"] < 0:
+        out.pop("ocr_device_id")
     for key in ("window_watch_interval_ms", "region_watch_interval_ms"):
         if key in out and not 50 <= out[key] <= 60000:
             out.pop(key)
@@ -157,7 +182,7 @@ def _validated_values(raw: object) -> dict:
         "window_watch_font_size",
         "region_watch_font_size",
     ):
-        if key in out and out[key] != 0 and not 8 <= out[key] <= 48:
+        if key in out and out[key] != 0 and not 12 <= out[key] <= 20:
             out.pop(key)
     for key in (
         "window_watch_diff_threshold",
